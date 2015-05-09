@@ -32,7 +32,9 @@ load_spray <- function(file_path)
             #   strptime returns POSIXlt which isnt supported in dplyr (#670)
             DateTime = as.POSIXct(strptime(paste(Date,Time), "%Y-%m-%d %I:%M:%S %p")),
             Date = as.Date(Date, "%Y-%m-%d"),
-            DateStr = format(Date, "%Y%m%d")
+            DateStr = format(Date, "%Y%m%d"),
+            Year = lubridate::year(Date),
+            Month = lubridate::month(Date, label=TRUE, abbr=TRUE)
         )
     
     # - return data set
@@ -89,6 +91,8 @@ load_weather <- function(file_path)
             
             Date = as.Date(Date),
             DateStr = format(Date, "%Y%m%d"),
+            Year = lubridate::year(Date),
+            Month = lubridate::month(Date, label=TRUE, abbr=TRUE),
             
             Tmax = as.numeric(Tmax),
             Tmin = as.numeric(Tmin),
@@ -226,10 +230,18 @@ load_test <- function(file_path)
             )
         ) %>%
         dplyr::mutate(
+            # - prep the species column by moving the test-only UNSPECIFIED 
+            #   CULEX to CULEX ERRATICUS, and re-doing the levels logistic 
+            #   regression will complain otherwise
+            # - this logic is copied from kaggle script, not sure why they choose this species
+            #   https://www.kaggle.com/users/48625/mlandry/predict-west-nile-virus/h2o-starter
+            Species = ifelse(Species=="UNSPECIFIED CULEX", "CULEX ERRATICUS", Species),
+            
             # - http://stackoverflow.com/questions/2859705/google-maps-api-geocoding-accuracy-chart
             AddressAccuracy = factor(AddressAccuracy, 
                 levels=c(3,5,8,9), 
                 labels=c("sub_region","post_code","address","premise")),
+            
             DateStr = format(Date, "%Y%m%d"),
             Year = lubridate::year(Date),
             Month = lubridate::month(Date, label=TRUE, abbr=TRUE),

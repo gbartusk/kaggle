@@ -9,6 +9,31 @@ knitr::opts_chunk$set(echo=TRUE, warning=FALSE, message=FALSE)
 ```
 
 
+```{r research_notes}
+
+# - 33 mosquitos facts: ://www.megacatch.com/mosquitofacts.html
+#   > They are cold-blooded and prefer temperatures over 80 degrees. At temperatures less than 50 degrees, they shut down for the winter
+#   > Mosquitoes spend their first 10 days in water
+#   > Usually, the eggs are deposited in clusters - called rafts - on the surface of stagnant water, or they are laid in areas that flood regularly.
+#   > The average mosquito lifespan is less than two months. Males have the shortest lives, usually 10 days or less, and females can live about six to eight weeks, under ideal conditions
+#   > Mosquitoes cant fly very far or very fast. Most mosquitoes can fly no more than about one to three miles, and often stay within several hundred feet of where they were hatched
+#   > Body heat marks the target. Mosquitoes use heat sensors around their mouthparts to detect the warmth of your body
+#   > West Nile virus came to the U.S. in 1999 with an epidemic in New York
+#
+
+# - CDC: http://www.cdc.gov/westnile/faq/genQuestions.html
+#   > The weather, numbers of birds that maintain the virus, numbers of mosquitoes that spread the virus, and human behavior are all factors that can influence when and where outbreaks occur
+#
+
+# - chicago grid: http://www.domu.com/blog/decoding-the-chicago-street-grid-system
+
+# - research paper on WNV (seen commented on kaggle script)
+# - http://www.ajtmh.org/content/80/2/268.full
+
+
+```
+
+
 ```{r load_pkgs_udfs}
 # - load packages
 library(knitr)          # - report writing
@@ -18,14 +43,16 @@ library(dplyr)          # - data manipulation
 library(lubridate)      # - date functions
 library(Metrics)        # - supervised learning evaluation metrics
 library(ggmap)          # - maps
+library(Hmisc)          # - 
 library(MASS)           # - applied stats methods
 library(class)          # - functions for classification
 library(caret)          # - model training functions
 library(pryr)           # - check memory
 
 # - directory paths
-dir_root <- file.path("/Users/Gus/Google Drive/dev/data_analysis/kaggle/wnv_chicago/")
+dir_root <- file.path("/Users/Gus/Google Drive/dev/kaggle/west_nile_chicago/")
 dir_data <- file.path(dir_root, "data")
+dir_submissions <- file.path(dir_root, "submissions")
 
 # - file paths
 path_src_toolbox <- file.path(dir_root,"toolbox.R")
@@ -56,6 +83,7 @@ df_train <- load_train(path_data_train)
 # ~~~~~
 
 # - load: test data
+#   there is ALOT of data here, due to simulated traps???
 df_test <- load_test(path_data_test)
 
 # - load: sample submission
@@ -71,6 +99,7 @@ df_submission <- load_submission(path_data_submission)
 #   > NumMosquitos is the number of mosquitoes caught in single trap
 #   > training data: raw(10506x18) -> collapsed(8610x18) but the proportions
 #     look very similar when rerunning data_stats chunk
+#   > join train to weather data based on closest station
 
 # - collapsing data to distinct data / location / trap (move to udf!)
 df_train <- df_train %>%
@@ -89,7 +118,7 @@ df_train <- df_train %>%
 # - join: weather data
 df_train_wthr <- df_train %>%
     dplyr::left_join(
-        dplyr::select(df_weather, -Date,-Latitude,-Longitude), 
+        dplyr::select(df_weather, -Date,-Year,-Month,-Latitude,-Longitude), 
         by=c("DateStr","Station")
     )
 
@@ -163,8 +192,8 @@ rm(t_wnv_by_species, t_wnv_by_yr, t_wnv_by_mo, t_wnv_by_day, t_wnv_by_wday)
 
 
 ```{r data_vis}
-# - resources
-#   > # - http://stat405.had.co.nz/ggmap.pdf
+# - Summary
+#   > 
 
 # - load: ggmap of chicago provided by kaggle
 gmap_chicago <- readRDS(path_map_chicago)
@@ -173,21 +202,26 @@ gmap_chicago <- readRDS(path_map_chicago)
 ggmap(gmap_chicago) + 
     geom_point(data=df_train_wnv, 
         aes(x=Longitude, y=Latitude, colour=Species, size=Species))
+
 # - boxed contour plot: location of WNV without knowing frequency
 ggmap(gmap_chicago) + 
     stat_bin2d(
         data=df_train_wnv, 
         aes(x=Longitude, y=Latitude, colour=Species, fill=Species),
         size=0.5, bins=50, alpha=0.5)
+
 # - create overlay
 overlay <- stat_density2d(
     aes(x=Longitude, y=Latitude, fill = ..level.., alpha = ..level..),
     bins = 4, geom = "polygon", data = df_train_wnv)
-# - map with overlay
+# - map with overlay (need to fix two level keys)
 ggmap(gmap_chicago) + overlay + inset(
     grob=ggplotGrob(ggplot() + overlay + theme_inset()),
     xmin=-Inf, xmax=-87.85, ymin=41.6, ymax=41.7)
+
 # - filled contour plot
+#   '.. ..' is used b/c aesthetic is not present in orig data, but rather is
+#   calc'd by the contour statistic
 ggmap(gmap_chicago) + 
     stat_density2d(data=df_train_wnv, 
         aes(x=Longitude, y=Latitude, fill=..level.., alpha=..level..),
@@ -195,7 +229,7 @@ ggmap(gmap_chicago) +
     scale_fill_gradient(low="black", high="red") +
     facet_wrap(~Year)
 
-# - pull ggmap of chicago
+# - pull ggmap of chicago (need to fix two level keys)
 ll <- ggmap::geocode("chicago", messaging=F)
 g_roadmap <- get_map(location=c(lon=ll[["lon"]],lat=ll[["lat"]]), source="google", 
     maptype="roadmap", crop=FALSE)
@@ -207,9 +241,9 @@ ggmap(g_roadmap) +
     labs(x="Longitude", y="Latitude", title="Trap Locations")
 
 # - plot spray data
-ggmap(gmap_chicago) + 
+ggmap(g_roadmap) + 
     geom_point(data=df_spray, aes(x=Longitude, y=Latitude)) +
-    facet_grid(.~Year) +
+    facet_grid(.~Date) +
     labs(x="Longitude", y="Latitude", title="Spray Locations by Year")
 
 # - plot: wnv across years
@@ -225,7 +259,7 @@ ggmap(g_roadmap) +
 #   likely because there is alot more greenland there than in city centre.
 #   Mosquitos become infected when they feed on infected birds
 ggmap(g_roadmap) +
-    geom_point(data=dplyr::filter(df_train,WnvPresent=="present"), 
+    geom_point(data=df_train_wnv, 
         aes(x=Longitude, y=Latitude, size=NumMosquitos), alpha=0.2) +
     facet_grid(Species~Year) +
     labs(x="Longitude", y="Latitude", title="WNV by Year and Species")
@@ -245,40 +279,47 @@ ggmap(g_roadmap) +
 
 
 ```{r model_logistic}
+# - Summary:
+#   > 
 
-# - 33 mosquitos facts: ://www.megacatch.com/mosquitofacts.html
-#   > They are cold-blooded and prefer temperatures over 80 degrees. At temperatures less than 50 degrees, they shut down for the winter
-#   > Mosquitoes spend their first 10 days in water
-#   > Usually, the eggs are deposited in clusters - called rafts - on the surface of stagnant water, or they are laid in areas that flood regularly.
-#   > The average mosquito lifespan is less than two months. Males have the shortest lives, usually 10 days or less, and females can live about six to eight weeks, under ideal conditions
-#   > Mosquitoes cant fly very far or very fast. Most mosquitoes can fly no more than about one to three miles, and often stay within several hundred feet of where they were hatched
-#   > Body heat marks the target. Mosquitoes use heat sensors around their mouthparts to detect the warmth of your body
-#   > West Nile virus came to the U.S. in 1999 with an epidemic in New York
-#
+# - cross-validation options:
+#   > random sub-sampling: caret::createDataPartition()
+#   > leave one out (LOOCV): k = n
+#   > k-folds: large k (less bias, more variance), small k (more bias, less variance)
+#   > bootstrap: 
+#   > 0.632 bootstrap: correct underestimation
 
-# - CDC: http://www.cdc.gov/westnile/faq/genQuestions.html
-#   > The weather, numbers of birds that maintain the virus, numbers of mosquitoes that spread the virus, and human behavior are all factors that can influence when and where outbreaks occur
-#
+# - cross validate date
+#df_train_fit <- df_train_wthr %>% dplyr::filter(Year != 2011) 
+#df_train_xVal <- df_train_wthr %>% dplyr::filter(Year == 2011) 
 
-# - chicago grid: http://www.domu.com/blog/decoding-the-chicago-street-grid-system
+# - validation set approach
+train_index <- caret::createDataPartition(y=df_train_wthr$WnvPresent, p=0.6, list=FALSE, times=1)
+df_train_fit <- df_train_wthr[train_index,]
+df_train_xVal <-  df_train_wthr[-train_index,]
+rm(train_index)
 
-# - research paper on WNV (seen commented on kaggle script)
-# - http://www.ajtmh.org/content/80/2/268.full
+# - cross-validation: leave-one-out
+
+# - cross-validation: k-folds
+folds <- caret::createFolds(y=df_train_wthr$WnvPresent, k=10, list=TRUE, returnTrain=TRUE)
+sapply(folds, length)
+
+# - cross-validation: resampling
+folds <- caret::createResample(y=df_train_wthr$WnvPresent, times=10, list=TRUE)
+sapply(folds, length)
 
 
-# - cross-validation
-#   > random sampling: caret::createDataPartition()
-#   > k-folds
-#   > leave one out
-df_train_fit <- df_train_weather %>% dplyr::filter(Year != 2011) 
-df_train_xVal <- df_train_weather %>% dplyr::filter(Year == 2011) 
-
-# - fit model 
+# - fit model
+#set.seed(123)
 fit <- glm(WnvPresent ~ Month, data=df_train_fit, family="binomial")
-summary(fit)
+#fit2 <- caret::train(WnvPresent ~ Month, data=df_train_fit, method="glm", family="binomial")
+#summary(fit)
+#coef(fit)
+#fit2$finalModel
 
 # - get probabilities for wnv for data we fit on
-contrasts(df_train_fit$WnvPresent)
+#contrasts(df_train_fit$WnvPresent)
 pred_fit <- predict(fit, type="response")
 
 # - predict the probabilities using the cross-validation data
@@ -289,9 +330,18 @@ pred_xVal <- predict(fit, newdata=df_train_xVal, type="response")
 #   this will be 0.5 is you just use the intercept
 Metrics::auc(as.numeric(df_train_xVal$WnvPresent)-1, pred_xVal)
 
+# - fit model now on all data
+fit_final <- glm(WnvPresent ~ Month, , data=df_train_wthr, family="binomial")
 
+# - create submission file (this should be udf)
+df_submission$WnvPresent <- predict(fit_final, newdata=df_test, type="response")
+path_submit <- file.path(dir_submissions, "1_simple_logistic.csv")
+readr::write_csv(df_submission, path_submit)
+
+
+#~~~~~~~~~~~~~~~~~~~~~~
 # - use caret::confusionMatrix(...)
-
+# - delete one caret is up and running!!!
 # - confusion matrix
 check <- 
     data.frame(
