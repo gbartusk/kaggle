@@ -1,0 +1,372 @@
+---
+title: "West Nile Virus Prediction in Chicago"
+author: "gbartusk"
+output: html_document
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, warning=FALSE, message=FALSE)
+```
+
+
+```{r load_pkgs_udfs}
+# - load packages
+library(knitr)          # - report writing
+library(ggplot2)        # - plotting
+library(gridExtra)      # - panel plots
+library(dplyr)          # - data manipulation
+library(lubridate)      # - date functions
+library(Metrics)        # - supervised learning evaluation metrics
+library(ggmap)          # - maps
+library(MASS)           # - applied stats methods
+library(class)          # - functions for classification
+library(caret)          # - model training functions
+library(pryr)           # - check memory
+
+# - directory paths
+dir_root <- file.path("/Users/Gus/Google Drive/dev/data_analysis/kaggle/wnv_chicago/")
+dir_data <- file.path(dir_root, "data")
+
+# - file paths
+path_src_toolbox <- file.path(dir_root,"toolbox.R")
+path_data_spray <- file.path(dir_data, "spray.csv.zip")
+path_data_weather <- file.path(dir_data, "weather.csv.zip")
+path_data_train <- file.path(dir_data, "train.csv.zip")
+path_data_test <- file.path(dir_data, "test.csv.zip")
+path_data_submission <- file.path(dir_data, "sampleSubmission.csv.zip")
+path_map_chicago <- file.path(dir_data, "mapdata_copyright_openstreetmap_contributors.rds")
+path_map_chicago_txt <- file.path(dir_data, "mapdata_copyright_openstreetmap_contributors.txt.zip")
+
+# - load R src files
+source(path_src_toolbox)    # - udfs
+
+```
+
+
+```{r load_data}
+# - load: spray data
+df_spray <- load_spray(path_data_spray)
+
+# - load: weather data
+df_weather <- load_weather(path_data_weather)
+
+# - load: training data
+df_train <- load_train(path_data_train)
+
+# ~~~~~
+
+# - load: test data
+df_test <- load_test(path_data_test)
+
+# - load: sample submission
+df_submission <- load_submission(path_data_submission)
+
+```
+
+
+```{r data_wrangle}
+# - Summary:
+#   > the raw data is organized so when the number of mosquitos >50 they split
+#     into another record/row in the data. 
+#   > NumMosquitos is the number of mosquitoes caught in single trap
+#   > training data: raw(10506x18) -> collapsed(8610x18) but the proportions
+#     look very similar when rerunning data_stats chunk
+
+# - collapsing data to distinct data / location / trap (move to udf!)
+df_train <- df_train %>%
+    group_by(
+        Date,
+        Latitude, Longitude, Station,
+        Species, WnvPresent,
+        Address, Block, Street, AddressNumberAndStreet, AddressAccuracy, 
+        Trap, SatelliteTrap,
+        DateStr, Year, Month, Day, WkDay
+    ) %>%
+    summarise(
+        NumMosquitos = sum(NumMosquitos, na.rm=T)
+    )
+
+# - join: weather data
+df_train_wthr <- df_train %>%
+    dplyr::left_join(
+        dplyr::select(df_weather, -Date,-Latitude,-Longitude), 
+        by=c("DateStr","Station")
+    )
+
+# - join: spray data
+#   > the spray times are all atleast 1wk apt (only 10 total times)
+unique(df_spray$Date)
+#   > first we need to know the most recent spray time
+#     ie max(spray date <= train date)
+#   > from that set (ie last spray date) we need to know closest spraying
+#     to that location
+#   > then we need to pick a threshold on both day since last spray and 
+#     distance of spray from location
+#       > The average mosquito lifespan is less than two months 
+#         avg - males: <10d, females: 6-8wks
+#       > Most mosquitoes can fly no more than about one to three miles, and 
+#         often stay within several hundred feet of where they were hatched
+
+# - wnv only data
+df_train_wnv <- dplyr::filter(df_train,WnvPresent=="present")
+
+
+```
+
+
+```{r data_stats}
+# - Summary
+#   > only 5% of the data is WNV (of 10.5k records)
+#   > 4/7 species have no wnv, doesnt seem like a good feature?
+#   > the training set has years 07,09,11,13 (train had even years)
+#   > year has many wnv cases in 2007 and 2013 ... why??? year doesnt make
+#     since as a feature but what even drives that barbell does! Perhaps
+#     they sprayed alot more in those years??
+#   > We know CDPH sets traps from late-may to early-october, August has
+#     the most cases but this is most likely only because its hottest then?
+#   > Day / WkDay probably are not important since CDPH lets the traps collect
+#     mosquitos Mon-Wed and then tests by the end of the week
+
+# - table: wnv
+round(prop.table(table(df_train$WnvPresent)),2)
+
+# - table: wnv by species
+#   WNV only shows up for three of the species
+t_wnv_by_species <- table(df_train$Species, df_train$WnvPresent)
+t_wnv_by_species
+round(prop.table(t_wnv_by_species)*100,2)
+
+# - table: wnv by year
+t_wnv_by_yr <- table(df_train$Year, df_train$WnvPresent)
+t_wnv_by_yr
+round(prop.table(t_wnv_by_yr)*100,2)
+
+# - table: wnv by month
+t_wnv_by_mo <- table(df_train$Month, df_train$WnvPresent)
+t_wnv_by_mo
+round(prop.table(t_wnv_by_mo)*100,2)
+
+# - table wnv by day
+t_wnv_by_day <- table(df_train$Day, df_train$WnvPresent)
+t_wnv_by_day
+round(prop.table(t_wnv_by_day)*100,2)
+
+# - table wnv by weekday day
+t_wnv_by_wday <- table(df_train$WkDay, df_train$WnvPresent)
+t_wnv_by_wday
+round(prop.table(t_wnv_by_wday)*100,2)
+
+# - clean up
+rm(t_wnv_by_species, t_wnv_by_yr, t_wnv_by_mo, t_wnv_by_day, t_wnv_by_wday)
+
+```
+
+
+```{r data_vis}
+# - resources
+#   > # - http://stat405.had.co.nz/ggmap.pdf
+
+# - load: ggmap of chicago provided by kaggle
+gmap_chicago <- readRDS(path_map_chicago)
+
+# - bubble chart: suffer from overplotting, one solution is binning
+ggmap(gmap_chicago) + 
+    geom_point(data=df_train_wnv, 
+        aes(x=Longitude, y=Latitude, colour=Species, size=Species))
+# - boxed contour plot: location of WNV without knowing frequency
+ggmap(gmap_chicago) + 
+    stat_bin2d(
+        data=df_train_wnv, 
+        aes(x=Longitude, y=Latitude, colour=Species, fill=Species),
+        size=0.5, bins=50, alpha=0.5)
+# - create overlay
+overlay <- stat_density2d(
+    aes(x=Longitude, y=Latitude, fill = ..level.., alpha = ..level..),
+    bins = 4, geom = "polygon", data = df_train_wnv)
+# - map with overlay
+ggmap(gmap_chicago) + overlay + inset(
+    grob=ggplotGrob(ggplot() + overlay + theme_inset()),
+    xmin=-Inf, xmax=-87.85, ymin=41.6, ymax=41.7)
+# - filled contour plot
+ggmap(gmap_chicago) + 
+    stat_density2d(data=df_train_wnv, 
+        aes(x=Longitude, y=Latitude, fill=..level.., alpha=..level..),
+        bins=5, geom="polygon") +
+    scale_fill_gradient(low="black", high="red") +
+    facet_wrap(~Year)
+
+# - pull ggmap of chicago
+ll <- ggmap::geocode("chicago", messaging=F)
+g_roadmap <- get_map(location=c(lon=ll[["lon"]],lat=ll[["lat"]]), source="google", 
+    maptype="roadmap", crop=FALSE)
+
+# - plot: trap locations
+dplyr::n_distinct(df_train$Trap)
+ggmap(g_roadmap) + 
+    geom_point(data=df_train, aes(x=Longitude, y=Latitude)) +
+    labs(x="Longitude", y="Latitude", title="Trap Locations")
+
+# - plot spray data
+ggmap(gmap_chicago) + 
+    geom_point(data=df_spray, aes(x=Longitude, y=Latitude)) +
+    facet_grid(.~Year) +
+    labs(x="Longitude", y="Latitude", title="Spray Locations by Year")
+
+# - plot: wnv across years
+ggmap(g_roadmap) +
+    geom_point(data=df_train, aes(x=Longitude, y=Latitude, 
+        colour=WnvPresent, size=NumMosquitos), alpha=0.2) +
+    facet_grid(WnvPresent~Year) +
+    scale_colour_manual(values=c("forestgreen","red")) +
+    labs(x="Longitude", y="Latitude", title="WNV By Year")
+
+# - plot: wnv present across years and type 
+#   the cases seem to be mostly localized in north and south of the city, most
+#   likely because there is alot more greenland there than in city centre.
+#   Mosquitos become infected when they feed on infected birds
+ggmap(g_roadmap) +
+    geom_point(data=dplyr::filter(df_train,WnvPresent=="present"), 
+        aes(x=Longitude, y=Latitude, size=NumMosquitos), alpha=0.2) +
+    facet_grid(Species~Year) +
+    labs(x="Longitude", y="Latitude", title="WNV by Year and Species")
+
+# - plot: wnv across months
+#   august appears very significant (compared to july and september), most
+#   likely because thats when its the hotest?
+ggmap(g_roadmap) +
+    geom_point(data=df_train, aes(x=Longitude, y=Latitude, 
+        colour=WnvPresent, size=NumMosquitos), alpha=0.2) +
+    facet_grid(WnvPresent~Month) +
+    scale_colour_manual(values=c("forestgreen","red")) +
+    labs(x="Longitude", y="Latitude", title="WNV by Month")
+
+
+```
+
+
+```{r model_logistic}
+
+# - 33 mosquitos facts: ://www.megacatch.com/mosquitofacts.html
+#   > They are cold-blooded and prefer temperatures over 80 degrees. At temperatures less than 50 degrees, they shut down for the winter
+#   > Mosquitoes spend their first 10 days in water
+#   > Usually, the eggs are deposited in clusters - called rafts - on the surface of stagnant water, or they are laid in areas that flood regularly.
+#   > The average mosquito lifespan is less than two months. Males have the shortest lives, usually 10 days or less, and females can live about six to eight weeks, under ideal conditions
+#   > Mosquitoes cant fly very far or very fast. Most mosquitoes can fly no more than about one to three miles, and often stay within several hundred feet of where they were hatched
+#   > Body heat marks the target. Mosquitoes use heat sensors around their mouthparts to detect the warmth of your body
+#   > West Nile virus came to the U.S. in 1999 with an epidemic in New York
+#
+
+# - CDC: http://www.cdc.gov/westnile/faq/genQuestions.html
+#   > The weather, numbers of birds that maintain the virus, numbers of mosquitoes that spread the virus, and human behavior are all factors that can influence when and where outbreaks occur
+#
+
+# - chicago grid: http://www.domu.com/blog/decoding-the-chicago-street-grid-system
+
+# - research paper on WNV (seen commented on kaggle script)
+# - http://www.ajtmh.org/content/80/2/268.full
+
+
+# - cross-validation
+#   > random sampling: caret::createDataPartition()
+#   > k-folds
+#   > leave one out
+df_train_fit <- df_train_weather %>% dplyr::filter(Year != 2011) 
+df_train_xVal <- df_train_weather %>% dplyr::filter(Year == 2011) 
+
+# - fit model 
+fit <- glm(WnvPresent ~ Month, data=df_train_fit, family="binomial")
+summary(fit)
+
+# - get probabilities for wnv for data we fit on
+contrasts(df_train_fit$WnvPresent)
+pred_fit <- predict(fit, type="response")
+
+# - predict the probabilities using the cross-validation data
+#   type response means output the probabilities
+pred_xVal <- predict(fit, newdata=df_train_xVal, type="response")
+
+# - area under roc curve
+#   this will be 0.5 is you just use the intercept
+Metrics::auc(as.numeric(df_train_xVal$WnvPresent)-1, pred_xVal)
+
+
+# - use caret::confusionMatrix(...)
+
+# - confusion matrix
+check <- 
+    data.frame(
+        actual=as.numeric(df_train_xVal$WnvPresent)-1, 
+        predicted_prob=pred_xVal
+    ) %>%
+    dplyr::mutate(
+        # - change threshold to avoid missing too many cases of wnv
+        #   ie we want to avoid false negatives
+        predicted_class = ifelse(pred_xVal>=0.1,1,0)
+    )
+confusion_matrix <- with(check, table(predicted_class, actual))
+confusion_matrix <- cbind(confusion_matrix, rowSums(confusion_matrix))
+confusion_matrix <- rbind(confusion_matrix, colSums(confusion_matrix))
+rownames(confusion_matrix) <- c("pred_no", "pred_yes","ttl")
+colnames(confusion_matrix) <- c("act_no", "act_yes","ttl")
+confusion_matrix
+confusion_matrix / nrow(check)
+
+# - null classifier: error rate if always predict no wnv
+null_classifier <- confusion_matrix["ttl","act_yes"] / confusion_matrix["ttl","ttl"]
+100*null_classifier
+# - error rate
+err_rate <- (confusion_matrix["pred_yes","act_no"] + confusion_matrix["pred_no","act_yes"]) / confusion_matrix["ttl","ttl"]
+100*err_rate
+# - sensitivity: percentage of actual wnv that are identified
+sensitivity <- confusion_matrix["pred_yes","act_yes"] / confusion_matrix["ttl","act_yes"]
+100*sensitivity
+# - specificity: percentage of non-defaulters that are correctly identified
+specificity <- confusion_matrix["pred_no","act_no"] / confusion_matrix["ttl","act_no"]
+100*specificity
+
+# - this data is an example of a "skewed class", ie predicting y=0 leads 
+#   to very high accuracy.
+# - precision = true positives / predicted positives
+precision <- confusion_matrix["pred_yes","act_yes"] / confusion_matrix["pred_yes","ttl"]
+100*precision
+# - recall = true positives / actual positives (aka sensitivity)
+recall <- confusion_matrix["pred_yes","act_yes"] / confusion_matrix["ttl","act_yes"]
+# - F1-score: help pick the threshold
+f1_score <- 2*(precision*recall)/(precision+recall)
+f1_score_alt <- 2*confusion_matrix["pred_yes","act_yes"]/(2*confusion_matrix["pred_yes","act_yes"] + confusion_matrix["pred_yes","act_no"] + confusion_matrix["pred_no","act_yes"])
+
+```
+
+
+```{r model_lda}
+# - linear discriminant analysis
+lda.fit <- MASS::lda(WnvPresent ~ Month, data=df_train_fit)
+lda.fit
+
+lda.pred <- predict(lda.fit, df_train_xVal)
+lda.class <- lda.pred$class
+table(lda.class, df_train_xVal$WnvPresent)
+
+```
+
+
+```{r model_qda}
+# - quadratic discriminant analysis
+qda.fit <- MASS::qda(WnvPresent ~ Month, data=df_train_fit)
+
+```
+
+
+```{r model_knn}
+# - K-Nearest Neighbors
+#class:knn()
+```
+
+
+```{r model_trees}
+# - trees, bagging, boosting, oh my
+# - random forests are usually one of the two top performing algos along
+#   with boosting in prediction contests
+```
+
+
