@@ -48,6 +48,9 @@ library(MASS)           # - applied stats methods
 library(class)          # - functions for classification
 library(caret)          # - model training functions
 library(pryr)           # - check memory
+library(rpart)          # - regression trees
+library(rattle)         # - regression tree plots
+library(gbm)            # - boosting with trees
 
 # - directory paths
 dir_root <- file.path("/Users/Gus/Google Drive/dev/kaggle/west_nile_chicago/")
@@ -297,6 +300,7 @@ ggmap(g_roadmap) +
 #   > caret: http://topepo.github.io/caret/training.html#custom
 #   > 
 
+# - not using caret package or cross-validation...
 # - create validation set
 train_index <- caret::createDataPartition(y=df_train_wthr$WnvPresent, p=0.8, list=FALSE, times=1)
 df_train_fit <- df_train_wthr[train_index,]
@@ -338,9 +342,10 @@ fit2 <- caret::train(WnvPresentF ~ Latitude + Longitude + Station + Block + Year
 # - print model
 fit2
 summary(fit2$finalModel)
-predictors(fit2)
 # - area under roc curve
-Metrics::auc(df_train_wthr$WnvPresent, predict(fit2$finalModel))
+pred_train <- predict(fit2, newdata=df_train_wthr, type="prob")[,"present"]
+Metrics::auc(df_train_wthr$WnvPresent, pred_train)
+#Metrics::auc(df_train_wthr$WnvPresent, predict(fit2$finalModel))
 
 
 # - create submission file (this should be udf)
@@ -382,6 +387,40 @@ qda.fit <- MASS::qda(WnvPresent ~ Month, data=df_train_fit)
 # - trees, bagging, boosting, oh my
 # - random forests are usually one of the two top performing algos along
 #   with boosting in prediction contests
+
+# - check which colummsn are not in test data
+colnames(df_train_wthr)[!(colnames(df_train_wthr) %in% colnames(df_test_wthr))]
+
+df_train_fit_regs <- df_train_wthr %>% dplyr::select(-WnvPresent, -Depart, -Sunrise, -Sunset,-Depth, -Water1, -SnowFall, -Address, -Street, -AddressNumberAndStreet, -AddressAccuracy, -DateStr, -WkDay, -CodeSum, -Trap, -Date, -SatelliteTrap, -NumMosquitos)
+
+# - fir regression tree ... only one break given so few wnv cases
+fit <- train(WnvPresentF ~ ., method="rpart", data=df_train_fit_regs)
+fit$finalModel
+# - plot tree ... doesnt work with one break
+rattle::fancyRpartPlot(fit$finalModel)
+
+# - boosting with trees
+#   was having an issue where prediction was dropping some rows when i used all
+#   entries, need to investigate this...
+#   http://stackoverflow.com/questions/26553944/error-with-new-data-with-same-number-of-predictors-but-different-number-of-rows
+fit <- train(WnvPresentF ~ Latitude + Longitude + Station + Block + Year + Month + Tavg + DewPoint + Species, method="gbm", data=df_train_fit_regs, verbose=F)
+fit
+fit$finalModel
+
+# - if predictions were create using predict.gbm, the user would have to specify the number of trees directly (there is no default)
+pred_test <- predict(fit, newdata=df_test_wthr, type="prob"); dim(pred_test); dim(df_test_wthr)
+pred_train <- predict(fit, newdata=df_train_fit_regs, type="prob"); dim(pred_train); dim(df_train_fit_regs)
+
+# - area under roc curve
+Metrics::auc(df_train_wthr$WnvPresent, pred_train[,"present"])
+
+# - create submission file (this should be udf)
+df_submission <- load_submission(path_data_submission)
+df_submission$WnvPresent <- pred_test[,"present"]
+dim(df_submission); head(df_submission)
+path_submit <- file.path(dir_submissions, "4_initial_gbm.csv")
+readr::write_csv(df_submission, path_submit)
+
 ```
 
 
