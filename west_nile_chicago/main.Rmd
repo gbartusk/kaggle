@@ -105,8 +105,9 @@ df_submission <- load_submission(path_data_submission)
 #   > join train to weather data based on closest station
 
 # - collapsing data to distinct data / location / trap (move to udf!)
-df_train <- df_train %>%
-    group_by(
+df_train <- as.data.frame(
+    df_train %>%
+    dplyr::group_by(
         Date,
         Latitude, Longitude, Station,
         Species, WnvPresent, WnvPresentF,
@@ -114,11 +115,9 @@ df_train <- df_train %>%
         Trap, SatelliteTrap,
         DateStr, Year, Month, Day, WkDay
     ) %>%
-    summarise(
+    dplyr::summarise(
         NumMosquitos = sum(NumMosquitos, na.rm=T)
-    )
-# - str fxn is showing all this nonsense...
-df_train <- as.data.frame(df_train)
+    ))
 
 # - join: weather data to train
 df_train_wthr <- as.data.frame(
@@ -393,34 +392,71 @@ colnames(df_train_wthr)[!(colnames(df_train_wthr) %in% colnames(df_test_wthr))]
 
 df_train_fit_regs <- df_train_wthr %>% dplyr::select(-WnvPresent, -Depart, -Sunrise, -Sunset,-Depth, -Water1, -SnowFall, -Address, -Street, -AddressNumberAndStreet, -AddressAccuracy, -DateStr, -WkDay, -CodeSum, -Trap, -Date, -SatelliteTrap, -NumMosquitos)
 
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# - TREES
 # - fir regression tree ... only one break given so few wnv cases
 fit <- train(WnvPresentF ~ ., method="rpart", data=df_train_fit_regs)
 fit$finalModel
 # - plot tree ... doesnt work with one break
 rattle::fancyRpartPlot(fit$finalModel)
 
-# - boosting with trees
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# - BOOSTING WITH TREES (submission 4)
 #   was having an issue where prediction was dropping some rows when i used all
 #   entries, need to investigate this...
 #   http://stackoverflow.com/questions/26553944/error-with-new-data-with-same-number-of-predictors-but-different-number-of-rows
-fit <- train(WnvPresentF ~ Latitude + Longitude + Station + Block + Year + Month + Tavg + DewPoint + Species, method="gbm", data=df_train_fit_regs, verbose=F)
-fit
-fit$finalModel
+fit_gbm <- train(WnvPresentF ~ Latitude + Longitude + Station + Block + Year + Month + Tavg + DewPoint + Species, method="gbm", data=df_train_fit_regs, verbose=F)
+fit_gbm
+fit_gbm$finalModel
 
-# - if predictions were create using predict.gbm, the user would have to specify the number of trees directly (there is no default)
-pred_test <- predict(fit, newdata=df_test_wthr, type="prob"); dim(pred_test); dim(df_test_wthr)
-pred_train <- predict(fit, newdata=df_train_fit_regs, type="prob"); dim(pred_train); dim(df_train_fit_regs)
+# - predict on both test and training
+pred_test_gbm <- predict(fit_gbm, newdata=df_test_wthr, type="prob"); dim(pred_test_gbm); dim(df_test_wthr)
+pred_train_gbm <- predict(fit_gbm, newdata=df_train_fit_regs, type="prob"); dim(pred_train_gbm); dim(df_train_fit_regs)
 
 # - area under roc curve
-Metrics::auc(df_train_wthr$WnvPresent, pred_train[,"present"])
+Metrics::auc(df_train_wthr$WnvPresent, pred_train_gbm[,"present"])
+
+# - accuracy 
+caret::confusionMatrix(df_train_wthr$WnvPresentF, predict(fit_gbm, newdata=df_train_fit_regs))
 
 # - create submission file (this should be udf)
 df_submission <- load_submission(path_data_submission)
-df_submission$WnvPresent <- pred_test[,"present"]
+df_submission$WnvPresent <- pred_test_gbm[,"present"]
 dim(df_submission); head(df_submission)
 path_submit <- file.path(dir_submissions, "4_initial_gbm.csv")
 readr::write_csv(df_submission, path_submit)
 
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# - RANDOM FORESTS (submission 5, 6)
+#fit_rf <- train(WnvPresentF ~ Latitude + Longitude + Station + Block + Year + Month + Tavg + DewPoint + Species, method="rf", data=df_train_fit_regs) # submission 5
+fit_rf <- train(WnvPresentF ~ Latitude + Longitude + Month + Tavg + DewPoint + Species, method="rf", data=df_train_fit_regs)
+
+# - predict on both test and training
+pred_test_rf <- predict(fit_rf, newdata=df_test_wthr, type="prob"); dim(pred_test_rf); dim(df_test_wthr)
+pred_train_rf <- predict(fit_rf, newdata=df_train_fit_regs, type="prob"); dim(pred_train_rf); dim(df_train_fit_regs)
+
+# - area under roc curve ... huge variance??!?
+Metrics::auc(df_train_wthr$WnvPresent, pred_train_rf[,"present"])
+
+# - accuracy
+caret::confusionMatrix(df_train_wthr$WnvPresentF, predict(fit_rf, newdata=df_train_fit_regs))
+
+# - create submission file (this should be udf)
+df_submission <- load_submission(path_data_submission)
+df_submission$WnvPresent <- pred_test_rf[,"present"]
+dim(df_submission); head(df_submission)
+path_submit <- file.path(dir_submissions, "6_initial_rf_slim.csv")
+readr::write_csv(df_submission, path_submit)
+
 ```
 
+
+```{r model_ensembling}
+# - combine different classifiers by avg/voting
+
+
+
+```
 
