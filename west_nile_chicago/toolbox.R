@@ -34,7 +34,8 @@ load_spray <- function(file_path)
             Date = as.Date(Date, "%Y-%m-%d"),
             DateStr = format(Date, "%Y%m%d"),
             Year = lubridate::year(Date),
-            Month = lubridate::month(Date, label=TRUE, abbr=TRUE)
+            #Month = lubridate::month(Date, label=TRUE, abbr=TRUE)
+            Month = as.factor(base::months(Date))
         )
     
     # - return data set
@@ -92,7 +93,8 @@ load_weather <- function(file_path)
             Date = as.Date(Date),
             DateStr = format(Date, "%Y%m%d"),
             Year = lubridate::year(Date),
-            Month = lubridate::month(Date, label=TRUE, abbr=TRUE),
+            #Month = lubridate::month(Date, label=TRUE, abbr=TRUE),
+            Month = as.factor(base::months(Date)),
             
             Tmax = as.numeric(Tmax),
             Tmin = as.numeric(Tmin),
@@ -172,16 +174,19 @@ load_train <- function(file_path)
             )
         ) %>%
         dplyr::mutate(
+            # - not doing this in read_csv since need to specify levels
+            Species = as.factor(Species),
             # - http://stackoverflow.com/questions/2859705/google-maps-api-geocoding-accuracy-chart
             AddressAccuracy = factor(AddressAccuracy, 
                 levels=c(3,5,8,9), 
                 labels=c("sub_region","post_code","address","premise")),
-            WnvPresent = factor(WnvPresent,
-                levels=c(0,1),
-                labels=c("absent","present")),
+            WnvPresentF = factor(WnvPresent,levels=c(0,1),labels=c("absent","present")),
             DateStr = format(Date, "%Y%m%d"),
             Year = lubridate::year(Date),
-            Month = lubridate::month(Date, label=TRUE, abbr=TRUE),
+            # - this creates an ordered factors which shows ploynomial values in regression
+            #   http://stackoverflow.com/questions/10954167/r-regression-with-months-as-independent-variables-labels
+            #Month = lubridate::month(Date, label=TRUE, abbr=TRUE),
+            Month = as.factor(base::months(Date)),
             Day = lubridate::mday(Date),
             WkDay = lubridate::wday(Date, label=TRUE, abbr=TRUE),
             # - traps setup near an established trap to enhance surveillance
@@ -235,7 +240,7 @@ load_test <- function(file_path)
             #   regression will complain otherwise
             # - this logic is copied from kaggle script, not sure why they choose this species
             #   https://www.kaggle.com/users/48625/mlandry/predict-west-nile-virus/h2o-starter
-            Species = ifelse(Species=="UNSPECIFIED CULEX", "CULEX ERRATICUS", Species),
+            Species = as.factor(ifelse(Species=="UNSPECIFIED CULEX", "CULEX ERRATICUS", Species)),
             
             # - http://stackoverflow.com/questions/2859705/google-maps-api-geocoding-accuracy-chart
             AddressAccuracy = factor(AddressAccuracy, 
@@ -244,7 +249,8 @@ load_test <- function(file_path)
             
             DateStr = format(Date, "%Y%m%d"),
             Year = lubridate::year(Date),
-            Month = lubridate::month(Date, label=TRUE, abbr=TRUE),
+            #Month = lubridate::month(Date, label=TRUE, abbr=TRUE),
+            Month = as.factor(base::months(Date)),
             Day = lubridate::mday(Date),
             WkDay = lubridate::wday(Date, label=TRUE, abbr=TRUE)
         )
@@ -355,4 +361,19 @@ get_closest_station <- function(lon, lat)
 }
 
 
+# - create submission csv file
+create_submission <- function(file_path_out, model_fit)
+{
+    # - load: sample submission
+    df_submission <- load_submission(path_data_submission)
+    
+    # - predict
+    #   this assumes df_test_wthr is already loaded in memory!!!
+    df_submission$WnvPresent <- predict(model_fit, newdata=df_test_wthr, type="response")
+    
+    # - write submission file
+    readr::write_csv(df_submission, file_path_out)
+    
+    return(TRUE)
+}
 

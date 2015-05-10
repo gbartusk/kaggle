@@ -106,7 +106,7 @@ df_train <- df_train %>%
     group_by(
         Date,
         Latitude, Longitude, Station,
-        Species, WnvPresent,
+        Species, WnvPresent, WnvPresentF,
         Address, Block, Street, AddressNumberAndStreet, AddressAccuracy, 
         Trap, SatelliteTrap,
         DateStr, Year, Month, Day, WkDay
@@ -114,13 +114,24 @@ df_train <- df_train %>%
     summarise(
         NumMosquitos = sum(NumMosquitos, na.rm=T)
     )
+# - str fxn is showing all this nonsense...
+df_train <- as.data.frame(df_train)
 
-# - join: weather data
-df_train_wthr <- df_train %>%
+# - join: weather data to train
+df_train_wthr <- as.data.frame(
+    df_train %>%
     dplyr::left_join(
         dplyr::select(df_weather, -Date,-Year,-Month,-Latitude,-Longitude), 
         by=c("DateStr","Station")
-    )
+    ))
+
+# - join: weather data to train
+df_test_wthr <- as.data.frame(
+    df_test %>%
+    dplyr::left_join(
+        dplyr::select(df_weather, -Date,-Year,-Month,-Latitude,-Longitude), 
+        by=c("DateStr","Station")
+    ))
 
 # - join: spray data
 #   > the spray times are all atleast 1wk apt (only 10 total times)
@@ -137,7 +148,7 @@ unique(df_spray$Date)
 #         often stay within several hundred feet of where they were hatched
 
 # - wnv only data
-df_train_wnv <- dplyr::filter(df_train,WnvPresent=="present")
+df_train_wnv <- dplyr::filter(df_train,WnvPresentF=="present")
 
 
 ```
@@ -157,31 +168,31 @@ df_train_wnv <- dplyr::filter(df_train,WnvPresent=="present")
 #     mosquitos Mon-Wed and then tests by the end of the week
 
 # - table: wnv
-round(prop.table(table(df_train$WnvPresent)),2)
+round(prop.table(table(df_train$WnvPresentF)),2)
 
 # - table: wnv by species
 #   WNV only shows up for three of the species
-t_wnv_by_species <- table(df_train$Species, df_train$WnvPresent)
+t_wnv_by_species <- table(df_train$Species, df_train$WnvPresentF)
 t_wnv_by_species
 round(prop.table(t_wnv_by_species)*100,2)
 
 # - table: wnv by year
-t_wnv_by_yr <- table(df_train$Year, df_train$WnvPresent)
+t_wnv_by_yr <- table(df_train$Year, df_train$WnvPresentF)
 t_wnv_by_yr
 round(prop.table(t_wnv_by_yr)*100,2)
 
 # - table: wnv by month
-t_wnv_by_mo <- table(df_train$Month, df_train$WnvPresent)
+t_wnv_by_mo <- table(df_train$Month, df_train$WnvPresentF)
 t_wnv_by_mo
 round(prop.table(t_wnv_by_mo)*100,2)
 
 # - table wnv by day
-t_wnv_by_day <- table(df_train$Day, df_train$WnvPresent)
+t_wnv_by_day <- table(df_train$Day, df_train$WnvPresentF)
 t_wnv_by_day
 round(prop.table(t_wnv_by_day)*100,2)
 
 # - table wnv by weekday day
-t_wnv_by_wday <- table(df_train$WkDay, df_train$WnvPresent)
+t_wnv_by_wday <- table(df_train$WkDay, df_train$WnvPresentF)
 t_wnv_by_wday
 round(prop.table(t_wnv_by_wday)*100,2)
 
@@ -249,8 +260,8 @@ ggmap(g_roadmap) +
 # - plot: wnv across years
 ggmap(g_roadmap) +
     geom_point(data=df_train, aes(x=Longitude, y=Latitude, 
-        colour=WnvPresent, size=NumMosquitos), alpha=0.2) +
-    facet_grid(WnvPresent~Year) +
+        colour=WnvPresentF, size=NumMosquitos), alpha=0.2) +
+    facet_grid(WnvPresentF~Year) +
     scale_colour_manual(values=c("forestgreen","red")) +
     labs(x="Longitude", y="Latitude", title="WNV By Year")
 
@@ -269,8 +280,8 @@ ggmap(g_roadmap) +
 #   likely because thats when its the hotest?
 ggmap(g_roadmap) +
     geom_point(data=df_train, aes(x=Longitude, y=Latitude, 
-        colour=WnvPresent, size=NumMosquitos), alpha=0.2) +
-    facet_grid(WnvPresent~Month) +
+        colour=WnvPresentF, size=NumMosquitos), alpha=0.2) +
+    facet_grid(WnvPresentF~Month) +
     scale_colour_manual(values=c("forestgreen","red")) +
     labs(x="Longitude", y="Latitude", title="WNV by Month")
 
@@ -294,9 +305,10 @@ ggmap(g_roadmap) +
 #df_train_xVal <- df_train_wthr %>% dplyr::filter(Year == 2011) 
 
 # - validation set approach
-train_index <- caret::createDataPartition(y=df_train_wthr$WnvPresent, p=0.6, list=FALSE, times=1)
+train_index <- caret::createDataPartition(y=df_train_wthr$WnvPresent, p=0.6, list=FALSE, times=1)    # could also use base::sample()
 df_train_fit <- df_train_wthr[train_index,]
 df_train_xVal <-  df_train_wthr[-train_index,]
+dim(df_train_fit); dim(df_train_xVal)
 rm(train_index)
 
 # - cross-validation: leave-one-out
@@ -310,12 +322,20 @@ folds <- caret::createResample(y=df_train_wthr$WnvPresent, times=10, list=TRUE)
 sapply(folds, length)
 
 
-# - fit model
+# - stepwise regression
+df_train_fit_regs <- df_train_fit %>% dplyr::select(-WnvPresentF,-Depart,-Sunrise,-Sunset,-Depth,-Water1,-SnowFall, -Address, -Street, -AddressNumberAndStreet, -AddressAccuracy, -DateStr, -WkDay, -CodeSum, -Trap, -Date)
+# - na vaues will 
+fit_all <- glm(WnvPresent ~ ., data=na.omit(df_train_fit_regs), family="binomial")
+step <- stepAIC(fit_all, direction="both", trace=0)
+step$anova
+
+# - fit model 
 #set.seed(123)
-fit <- glm(WnvPresent ~ Month, data=df_train_fit, family="binomial")
+reg_form <- "WnvPresent ~ Latitude + Longitude + Station + Species + Block + Year + Month + Tavg + DewPoint"
+fit <- glm(reg_form, data=df_train_fit, family="binomial")
+summary(fit)
+#set.seed(123)
 #fit2 <- caret::train(WnvPresent ~ Month, data=df_train_fit, method="glm", family="binomial")
-#summary(fit)
-#coef(fit)
 #fit2$finalModel
 
 # - get probabilities for wnv for data we fit on
@@ -328,14 +348,20 @@ pred_xVal <- predict(fit, newdata=df_train_xVal, type="response")
 
 # - area under roc curve
 #   this will be 0.5 is you just use the intercept
-Metrics::auc(as.numeric(df_train_xVal$WnvPresent)-1, pred_xVal)
+Metrics::auc(df_train_xVal$WnvPresent, pred_xVal)
+
+# - confusion matrix
+#   at 0.5 threshold, its predicting nothing to be one!
+caret::confusionMatrix(ifelse(pred_xVal>=0.5,1,0), df_train_xVal$WnvPresent)
 
 # - fit model now on all data
-fit_final <- glm(WnvPresent ~ Month, , data=df_train_wthr, family="binomial")
+fit_final <- glm(reg_form, data=df_train_wthr, family="binomial")
+summary(fit_final)
+
 
 # - create submission file (this should be udf)
-df_submission$WnvPresent <- predict(fit_final, newdata=df_test, type="response")
-path_submit <- file.path(dir_submissions, "1_simple_logistic.csv")
+df_submission$WnvPresent <- predict(fit_final, newdata=df_test_wthr, type="response")
+path_submit <- file.path(dir_submissions, "2_step_logistic.csv")
 readr::write_csv(df_submission, path_submit)
 
 
