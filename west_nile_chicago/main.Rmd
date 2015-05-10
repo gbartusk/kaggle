@@ -293,33 +293,33 @@ ggmap(g_roadmap) +
 # - Summary:
 #   > 
 
-# - cross-validation options:
-#   > random sub-sampling: caret::createDataPartition()
-#   > leave one out (LOOCV): k = n
-#   > k-folds: large k (less bias, more variance), small k (more bias, less variance)
-#   > bootstrap: 
-#   > 0.632 bootstrap: correct underestimation
+# - Notes:
+#   > caret: http://topepo.github.io/caret/training.html#custom
+#   > 
 
-# - cross validate date
-#df_train_fit <- df_train_wthr %>% dplyr::filter(Year != 2011) 
-#df_train_xVal <- df_train_wthr %>% dplyr::filter(Year == 2011) 
-
-# - validation set approach
-train_index <- caret::createDataPartition(y=df_train_wthr$WnvPresent, p=0.6, list=FALSE, times=1)    # could also use base::sample()
+# - create validation set
+train_index <- caret::createDataPartition(y=df_train_wthr$WnvPresent, p=0.8, list=FALSE, times=1)
 df_train_fit <- df_train_wthr[train_index,]
-df_train_xVal <-  df_train_wthr[-train_index,]
-dim(df_train_fit); dim(df_train_xVal)
+df_train_val <-  df_train_wthr[-train_index,]
 rm(train_index)
-
-# - cross-validation: leave-one-out
-
-# - cross-validation: k-folds
-folds <- caret::createFolds(y=df_train_wthr$WnvPresent, k=10, list=TRUE, returnTrain=TRUE)
-sapply(folds, length)
-
-# - cross-validation: resampling
-folds <- caret::createResample(y=df_train_wthr$WnvPresent, times=10, list=TRUE)
-sapply(folds, length)
+# - check species
+table(df_train_fit$Species); table(df_train_val$Species)
+# - fit the model ... as.formula() function
+reg_form <- as.formula("as.factor(WnvPresent) ~ Latitude + Longitude + Station + Block + Year + Month + Tavg + DewPoint + Species")
+fit <- glm(reg_form, data=df_train_fit, family="binomial")
+#summary(fit)
+# - get probabilities for wnv for data we fit on
+pred_fit <- predict(fit, type="response")
+# - predict the probabilities using the cross-validation data
+#   type response means output the probabilities
+pred_val <- predict(fit, newdata=df_train_val, type="response")
+# - area under roc curve
+Metrics::auc(df_train_val$WnvPresent, pred_val)
+# - confusion matrix
+caret::confusionMatrix(ifelse(pred_val>=0.5,1,0), df_train_val$WnvPresent)
+# - fit model now on all data
+fit_final <- glm(reg_form, data=df_train_wthr, family="binomial")
+summary(fit_final)
 
 
 # - stepwise regression
@@ -329,87 +329,26 @@ fit_all <- glm(WnvPresent ~ ., data=na.omit(df_train_fit_regs), family="binomial
 step <- stepAIC(fit_all, direction="both", trace=0)
 step$anova
 
-# - fit model 
-#set.seed(123)
-reg_form <- "WnvPresent ~ Latitude + Longitude + Station + Species + Block + Year + Month + Tavg + DewPoint"
-fit <- glm(reg_form, data=df_train_fit, family="binomial")
-summary(fit)
-#set.seed(123)
-#fit2 <- caret::train(WnvPresent ~ Month, data=df_train_fit, method="glm", family="binomial")
-#fit2$finalModel
 
-# - get probabilities for wnv for data we fit on
-#contrasts(df_train_fit$WnvPresent)
-pred_fit <- predict(fit, type="response")
-
-# - predict the probabilities using the cross-validation data
-#   type response means output the probabilities
-pred_xVal <- predict(fit, newdata=df_train_xVal, type="response")
-
+# - 10-folds cross-validation
+# - For example, in problems where there are a low percentage of samples in one class, using metric = "Kappa" can improve quality of the final model.
+# - the y variable
+train_ctrl <- trainControl(method = "repeatedcv", number = 10, repeats=3)
+fit2 <- caret::train(WnvPresentF ~ Latitude + Longitude + Station + Block + Year + Month + Tavg + DewPoint + Species, data=df_train_wthr, method="glm", family="binomial", trControl = train_ctrl, metric = "kappa")
+# - print model
+fit2
+summary(fit2$finalModel)
+predictors(fit2)
 # - area under roc curve
-#   this will be 0.5 is you just use the intercept
-Metrics::auc(df_train_xVal$WnvPresent, pred_xVal)
-
-# - confusion matrix
-#   at 0.5 threshold, its predicting nothing to be one!
-caret::confusionMatrix(ifelse(pred_xVal>=0.5,1,0), df_train_xVal$WnvPresent)
-
-# - fit model now on all data
-fit_final <- glm(reg_form, data=df_train_wthr, family="binomial")
-summary(fit_final)
+Metrics::auc(df_train_wthr$WnvPresent, predict(fit2$finalModel))
 
 
 # - create submission file (this should be udf)
-df_submission$WnvPresent <- predict(fit_final, newdata=df_test_wthr, type="response")
-path_submit <- file.path(dir_submissions, "2_step_logistic.csv")
+df_submission <- load_submission(path_data_submission)
+df_submission$WnvPresent <- predict(fit2, newdata=df_test_wthr, type="prob")[,"present"]
+path_submit <- file.path(dir_submissions, "3_step_logistic_kFolds.csv")
 readr::write_csv(df_submission, path_submit)
 
-
-#~~~~~~~~~~~~~~~~~~~~~~
-# - use caret::confusionMatrix(...)
-# - delete one caret is up and running!!!
-# - confusion matrix
-check <- 
-    data.frame(
-        actual=as.numeric(df_train_xVal$WnvPresent)-1, 
-        predicted_prob=pred_xVal
-    ) %>%
-    dplyr::mutate(
-        # - change threshold to avoid missing too many cases of wnv
-        #   ie we want to avoid false negatives
-        predicted_class = ifelse(pred_xVal>=0.1,1,0)
-    )
-confusion_matrix <- with(check, table(predicted_class, actual))
-confusion_matrix <- cbind(confusion_matrix, rowSums(confusion_matrix))
-confusion_matrix <- rbind(confusion_matrix, colSums(confusion_matrix))
-rownames(confusion_matrix) <- c("pred_no", "pred_yes","ttl")
-colnames(confusion_matrix) <- c("act_no", "act_yes","ttl")
-confusion_matrix
-confusion_matrix / nrow(check)
-
-# - null classifier: error rate if always predict no wnv
-null_classifier <- confusion_matrix["ttl","act_yes"] / confusion_matrix["ttl","ttl"]
-100*null_classifier
-# - error rate
-err_rate <- (confusion_matrix["pred_yes","act_no"] + confusion_matrix["pred_no","act_yes"]) / confusion_matrix["ttl","ttl"]
-100*err_rate
-# - sensitivity: percentage of actual wnv that are identified
-sensitivity <- confusion_matrix["pred_yes","act_yes"] / confusion_matrix["ttl","act_yes"]
-100*sensitivity
-# - specificity: percentage of non-defaulters that are correctly identified
-specificity <- confusion_matrix["pred_no","act_no"] / confusion_matrix["ttl","act_no"]
-100*specificity
-
-# - this data is an example of a "skewed class", ie predicting y=0 leads 
-#   to very high accuracy.
-# - precision = true positives / predicted positives
-precision <- confusion_matrix["pred_yes","act_yes"] / confusion_matrix["pred_yes","ttl"]
-100*precision
-# - recall = true positives / actual positives (aka sensitivity)
-recall <- confusion_matrix["pred_yes","act_yes"] / confusion_matrix["ttl","act_yes"]
-# - F1-score: help pick the threshold
-f1_score <- 2*(precision*recall)/(precision+recall)
-f1_score_alt <- 2*confusion_matrix["pred_yes","act_yes"]/(2*confusion_matrix["pred_yes","act_yes"] + confusion_matrix["pred_yes","act_no"] + confusion_matrix["pred_no","act_yes"])
 
 ```
 
