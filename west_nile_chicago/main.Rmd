@@ -78,12 +78,10 @@ source(path_src_toolbox)    # - udfs
 df_spray <- load_spray(path_data_spray)
 
 # - load: weather data
-df_weather <- load_weather(path_data_weather)
+df_weather <- load_weather(path_data_weather, impute=TRUE)
 
 # - load: training data
-df_train <- load_train(path_data_train)
-
-# ~~~~~
+df_train <- load_train(path_data_train, collapse=TRUE)
 
 # - load: test data
 #   there is ALOT of data here, due to simulated traps???
@@ -92,48 +90,40 @@ df_test <- load_test(path_data_test)
 # - load: sample submission
 df_submission <- load_submission(path_data_submission)
 
+# - join: train and weather
+df_train_wthr <- join_train_weather()
+
+# - join: train and weather
+df_test_wthr <- join_test_weather()
+
+
 ```
 
 
 ```{r data_wrangle}
 # - Summary:
-#   > the raw data is organized so when the number of mosquitos >50 they split
-#     into another record/row in the data. 
-#   > NumMosquitos is the number of mosquitoes caught in single trap
-#   > training data: raw(10506x18) -> collapsed(8610x18) but the proportions
-#     look very similar when rerunning data_stats chunk
-#   > join train to weather data based on closest station
+#   
 
-# - collapsing data to distinct data / location / trap (move to udf!)
-df_train <- as.data.frame(
-    df_train %>%
-    dplyr::group_by(
-        Date,
-        Latitude, Longitude, Station,
-        Species, WnvPresent, WnvPresentF,
-        Address, Block, Street, AddressNumberAndStreet, AddressAccuracy, 
-        Trap, SatelliteTrap,
-        DateStr, Year, Month, Day, WkDay
-    ) %>%
-    dplyr::summarise(
-        NumMosquitos = sum(NumMosquitos, na.rm=T)
-    ))
+# - wnv only data
+df_train_wnv <- dplyr::filter(df_train, WnvPresentF=="present")
+df_train_wthr_wnv <- dplyr::filter(df_train_wthr, WnvPresentF=="present")
 
-# - join: weather data to train
-df_train_wthr <- as.data.frame(
-    df_train %>%
-    dplyr::left_join(
-        dplyr::select(df_weather, -Date,-Year,-Month,-Latitude,-Longitude), 
-        by=c("DateStr","Station")
-    ))
 
-# - join: weather data to train
-df_test_wthr <- as.data.frame(
-    df_test %>%
-    dplyr::left_join(
-        dplyr::select(df_weather, -Date,-Year,-Month,-Latitude,-Longitude), 
-        by=c("DateStr","Station")
-    ))
+
+# - pca: compute
+df_train_wthr_pca <- df_train_wthr %>% dplyr::select(Tmax,Tmin,Tavg,DewPoint,WetBulb,Heat,Cool,PrecipTotal,StnPressure,SeaLevel,ResultSpeed,ResultDir,AvgSpeed,Latitude,Longitude,Elevation)
+df_test_wthr_pca <- df_test_wthr %>% dplyr::select(Tmax,Tmin,Tavg,DewPoint,WetBulb,Heat,Cool,PrecipTotal,StnPressure,SeaLevel,ResultSpeed,ResultDir,AvgSpeed,Latitude,Longitude,Elevation)
+# - look at correlation table
+M <- abs(cor(df_train_wthr_pca))   # - how to deal with NA??
+diag(M) <- 0
+which(M > 0.7, arr.ind = T)
+View(M)
+# - have to use same PCs that calc'd on training for test (ie the rotations)
+fit_weather_pca <- caret::preProcess(df_train_wthr_pca, method="pca", thresh=0.9)
+pred_weather_train_pca <- predict(fit_weather_pca, df_train_wthr_pca)
+pred_weather_test_pca <- predict(fit_weather_pca, df_test_wthr_pca)
+
+df_train_wthr <- cbind(df_train_wthr,pred_weather_train_pca)
 
 # - join: spray data
 #   > the spray times are all atleast 1wk apt (only 10 total times)
@@ -148,10 +138,6 @@ unique(df_spray$Date)
 #         avg - males: <10d, females: 6-8wks
 #       > Most mosquitoes can fly no more than about one to three miles, and 
 #         often stay within several hundred feet of where they were hatched
-
-# - wnv only data
-df_train_wnv <- dplyr::filter(df_train,WnvPresentF=="present")
-
 
 ```
 
@@ -168,6 +154,15 @@ df_train_wnv <- dplyr::filter(df_train,WnvPresentF=="present")
 #     the most cases but this is most likely only because its hottest then?
 #   > Day / WkDay probably are not important since CDPH lets the traps collect
 #     mosquitos Mon-Wed and then tests by the end of the week
+#   > spray data only has 10 dates and is not provided for the test set
+#     there are alot of forum posts complaining about this
+#   > training data has very few obs in May but test data has no May data
+#   >
+#   >
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# - training data 
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 # - table: wnv
 round(prop.table(table(df_train$WnvPresentF)),2)
@@ -198,8 +193,32 @@ t_wnv_by_wday <- table(df_train$WkDay, df_train$WnvPresentF)
 t_wnv_by_wday
 round(prop.table(t_wnv_by_wday)*100,2)
 
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# - spay dates
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+round(prop.table(table(year(df_spray$Date), month(df_spray$Date)))*100,2)
+
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# - weather data
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# - weather data only available for summer but covers all months
+#   and years in train/test set
+table(df_weather$Month, df_weather$Year)
+
+# - wnv by temp and month
+table(df_train_wthr$WnvPresentF, Hmisc::cut2(df_train_wthr$Tmax, g=5), df_train_wthr$Month)
+
+
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # - clean up
 rm(t_wnv_by_species, t_wnv_by_yr, t_wnv_by_mo, t_wnv_by_day, t_wnv_by_wday)
+
+
 
 ```
 
@@ -288,6 +307,19 @@ ggmap(g_roadmap) +
     labs(x="Longitude", y="Latitude", title="WNV by Month")
 
 
+# - wnv by temp
+g_Tmin <- ggplot(data=df_train_wthr, aes(x=WnvPresentF, y=Tmin, colour=WnvPresentF)) + geom_boxplot() + stat_summary(fun.y=mean, geom="point", shape=5, size=4) + stat_summary(fun.y=mean, geom="line", aes(group=1), colour="black") + theme(axis.title.x = element_blank(), legend.position='none')
+g_Tavg <- ggplot(data=df_train_wthr, aes(x=WnvPresentF, y=Tavg, colour=WnvPresentF)) + geom_boxplot() + stat_summary(fun.y=mean, geom="point", shape=5, size=4) + stat_summary(fun.y=mean, geom="line", aes(group=1), colour="black") + theme(axis.title.x = element_blank(), legend.position='none')
+g_Tmax <- ggplot(data=df_train_wthr, aes(x=WnvPresentF, y=Tmax, colour=WnvPresentF)) + geom_boxplot() + stat_summary(fun.y=mean, geom="point", shape=5, size=4) + stat_summary(fun.y=mean, geom="line", aes(group=1), colour="black") + theme(axis.title.x = element_blank(), legend.position='none')
+g_Depart <- ggplot(data=df_train_wthr, aes(x=WnvPresentF, y=Depart, colour=WnvPresentF)) + geom_boxplot() + stat_summary(fun.y=mean, geom="point", shape=5, size=4) + stat_summary(fun.y=mean, geom="line", aes(group=1), colour="black") + theme(axis.title.x = element_blank(), legend.position='none')
+g_DewPoint <- ggplot(data=df_train_wthr, aes(x=WnvPresentF, y=DewPoint, colour=WnvPresentF)) + geom_boxplot() + stat_summary(fun.y=mean, geom="point", shape=5, size=4) + stat_summary(fun.y=mean, geom="line", aes(group=1), colour="black") + theme(axis.title.x = element_blank(), legend.position='none')
+g_WetBulb <- ggplot(data=df_train_wthr, aes(x=WnvPresentF, y=WetBulb, colour=WnvPresentF)) + geom_boxplot() + stat_summary(fun.y=mean, geom="point", shape=5, size=4) + stat_summary(fun.y=mean, geom="line", aes(group=1), colour="black") + theme(axis.title.x = element_blank(), legend.position='none')
+g_Heat <- ggplot(data=df_train_wthr, aes(x=WnvPresentF, y=Heat, colour=WnvPresentF)) + geom_boxplot() + stat_summary(fun.y=mean, geom="point", shape=5, size=4) + stat_summary(fun.y=mean, geom="line", aes(group=1), colour="black") + theme(axis.title.x = element_blank(), legend.position='none')
+g_Cool <- ggplot(data=df_train_wthr, aes(x=WnvPresentF, y=Cool, colour=WnvPresentF)) + geom_boxplot() + stat_summary(fun.y=mean, geom="point", shape=5, size=4) + stat_summary(fun.y=mean, geom="line", aes(group=1), colour="black") + theme(axis.title.x = element_blank(), legend.position='none')
+
+gridExtra::grid.arrange(g_Tmin, g_Tavg, g_Tmax, g_Depart, g_DewPoint, g_WetBulb, nrow=1)
+
+
 ```
 
 
@@ -337,19 +369,20 @@ step$anova
 # - For example, in problems where there are a low percentage of samples in one class, using metric = "Kappa" can improve quality of the final model.
 # - the y variable
 train_ctrl <- trainControl(method = "repeatedcv", number = 10, repeats=3)
-fit2 <- caret::train(WnvPresentF ~ Latitude + Longitude + Station + Block + Year + Month + Tavg + DewPoint + Species, data=df_train_wthr, method="glm", family="binomial", trControl = train_ctrl, metric = "kappa")
+fit_logit <- caret::train(WnvPresentF ~ Latitude + Longitude + Station + Block + Year + Month + Tavg + DewPoint + Species, data=df_train_wthr, method="glm", family="binomial", trControl = train_ctrl, metric = "kappa")
 # - print model
-fit2
-summary(fit2$finalModel)
+fit_logit
+summary(fit_logit$finalModel)
 # - area under roc curve
-pred_train <- predict(fit2, newdata=df_train_wthr, type="prob")[,"present"]
-Metrics::auc(df_train_wthr$WnvPresent, pred_train)
-#Metrics::auc(df_train_wthr$WnvPresent, predict(fit2$finalModel))
+pred_logit_train <- predict(fit_logit, newdata=df_train_wthr, type="prob")[,"present"]
+Metrics::auc(df_train_wthr$WnvPresent, pred_logit_train)
+# - accuracy 
+caret::confusionMatrix(df_train_wthr$WnvPresentF, predict(fit_logit, newdata=df_train_wthr))
 
 
 # - create submission file (this should be udf)
 df_submission <- load_submission(path_data_submission)
-df_submission$WnvPresent <- predict(fit2, newdata=df_test_wthr, type="prob")[,"present"]
+df_submission$WnvPresent <- predict(pred_logit_train, newdata=df_test_wthr, type="prob")[,"present"]
 path_submit <- file.path(dir_submissions, "3_step_logistic_kFolds.csv")
 readr::write_csv(df_submission, path_submit)
 
@@ -359,19 +392,20 @@ readr::write_csv(df_submission, path_submit)
 
 ```{r model_lda}
 # - linear discriminant analysis
-lda.fit <- MASS::lda(WnvPresent ~ Month, data=df_train_fit)
-lda.fit
-
-lda.pred <- predict(lda.fit, df_train_xVal)
-lda.class <- lda.pred$class
-table(lda.class, df_train_xVal$WnvPresent)
+fit_lda <- caret::train(WnvPresentF ~ Latitude + Longitude + Station + Block + Year + Month + Tavg + DewPoint + Species, data=df_train_wthr, method="lda")
+# - area under roc curve
+pred_lda_train <- predict(fit_lda, newdata=df_train_wthr, type="prob")[,"present"]
+Metrics::auc(df_train_wthr$WnvPresent, pred_lda_train)
+# - accuracy 
+caret::confusionMatrix(df_train_wthr$WnvPresentF, predict(fit_lda, newdata=df_train_wthr))
 
 ```
 
 
 ```{r model_qda}
-# - quadratic discriminant analysis
-qda.fit <- MASS::qda(WnvPresent ~ Month, data=df_train_fit)
+
+# - lda assumes that regressors are dist multi-var gaussian for each Y class
+#   and that there is a single cor-matrix
 
 ```
 
@@ -393,6 +427,8 @@ colnames(df_train_wthr)[!(colnames(df_train_wthr) %in% colnames(df_test_wthr))]
 df_train_fit_regs <- df_train_wthr %>% dplyr::select(-WnvPresent, -Depart, -Sunrise, -Sunset,-Depth, -Water1, -SnowFall, -Address, -Street, -AddressNumberAndStreet, -AddressAccuracy, -DateStr, -WkDay, -CodeSum, -Trap, -Date, -SatelliteTrap, -NumMosquitos)
 
 
+colnames(df_train_fit_regs)[!(colnames(df_train_fit_regs) %in% colnames(df_test_wthr))]
+
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # - TREES
 # - fir regression tree ... only one break given so few wnv cases
@@ -403,17 +439,15 @@ rattle::fancyRpartPlot(fit$finalModel)
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# - BOOSTING WITH TREES (submission 4)
-#   was having an issue where prediction was dropping some rows when i used all
-#   entries, need to investigate this...
-#   http://stackoverflow.com/questions/26553944/error-with-new-data-with-same-number-of-predictors-but-different-number-of-rows
-fit_gbm <- train(WnvPresentF ~ Latitude + Longitude + Station + Block + Year + Month + Tavg + DewPoint + Species, method="gbm", data=df_train_fit_regs, verbose=F)
+# - BOOSTING WITH TREES (submission 4,7)
+# - values with NA will cause predict to return less results!
+fit_gbm <- train(WnvPresentF ~ Latitude+Longitude+Species+Block+Year+Month+Day+Tmax+Tmin+Tavg+DewPoint+Heat+Cool+SeaLevel+ResultSpeed+ResultDir+AvgSpeed+Elevation, method="gbm", data=df_train_fit_regs, verbose=F)
 fit_gbm
 fit_gbm$finalModel
 
 # - predict on both test and training
-pred_test_gbm <- predict(fit_gbm, newdata=df_test_wthr, type="prob"); dim(pred_test_gbm); dim(df_test_wthr)
 pred_train_gbm <- predict(fit_gbm, newdata=df_train_fit_regs, type="prob"); dim(pred_train_gbm); dim(df_train_fit_regs)
+pred_test_gbm <- predict(fit_gbm, newdata=df_test_wthr, type="prob"); dim(pred_test_gbm); dim(df_test_wthr)
 
 # - area under roc curve
 Metrics::auc(df_train_wthr$WnvPresent, pred_train_gbm[,"present"])
@@ -425,13 +459,13 @@ caret::confusionMatrix(df_train_wthr$WnvPresentF, predict(fit_gbm, newdata=df_tr
 df_submission <- load_submission(path_data_submission)
 df_submission$WnvPresent <- pred_test_gbm[,"present"]
 dim(df_submission); head(df_submission)
-path_submit <- file.path(dir_submissions, "4_initial_gbm.csv")
+path_submit <- file.path(dir_submissions, "7_gbm_addl_vars.csv")
 readr::write_csv(df_submission, path_submit)
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # - RANDOM FORESTS (submission 5, 6)
 #fit_rf <- train(WnvPresentF ~ Latitude + Longitude + Station + Block + Year + Month + Tavg + DewPoint + Species, method="rf", data=df_train_fit_regs) # submission 5
-fit_rf <- train(WnvPresentF ~ Latitude + Longitude + Month + Tavg + DewPoint + Species, method="rf", data=df_train_fit_regs)
+fit_rf <- train(WnvPresentF ~ Month + Tavg + DewPoint + Species, method="rf", data=df_train_fit_regs)
 
 # - predict on both test and training
 pred_test_rf <- predict(fit_rf, newdata=df_test_wthr, type="prob"); dim(pred_test_rf); dim(df_test_wthr)
