@@ -25,7 +25,8 @@ load_spray <- function(file_path)
                 Time = col_character(),
                 Latitude = col_double(),
                 Longitude = col_double()
-            )
+            ),
+            progress = FALSE
         ) %>%
         dplyr::mutate(
             # - lubridate fast_strptime doesnt support this format for time and 
@@ -44,7 +45,7 @@ load_spray <- function(file_path)
 
 
 # - loader: weather data set
-load_weather <- function(file_path)
+load_weather <- function(file_path, impute=TRUE)
 {
     # - check argument
     if( missing(file_path) )
@@ -60,6 +61,9 @@ load_weather <- function(file_path)
     #   note data is in long format with repeated dates for each station
     station_loc <- get_weather_station_local()
     
+    # - debugging
+    #file_path <- path_data_weather
+    
     # - load data into memory
     df_data <- read.csv(unzip(file_path), colClasses = "character", 
         na.string=c(""," ","-","M"))
@@ -71,12 +75,24 @@ load_weather <- function(file_path)
     
     # - update all trace readings (SnowFall and PrecipTotal)
     df_data[df_data=="T"] <- NA
+    df_data[df_data=="M"] <- NA
     
     # - define schema
     df_data <- df_data %>%
         dplyr::mutate(
-            Station = as.integer(Station),
+            # - dates
+            Date = as.Date(Date),
+            DateStr = format(Date, "%Y%m%d"),
+            Year = lubridate::year(Date),
+            #Month = lubridate::month(Date, label=TRUE, abbr=TRUE),
+            Month = as.factor(base::months(Date)),
             
+            # - weather station
+            Station = as.integer(Station),
+            # - flip station for imputation join
+            StationFlip = ifelse(Station==1,2,1),
+            
+            # - location
             Latitude = ifelse(
                 Station==1, station_loc[["s1"]]$lat, 
                 ifelse(Station==2, station_loc[["s2"]]$lat, NA)
@@ -90,16 +106,23 @@ load_weather <- function(file_path)
                 ifelse(Station==2, station_loc[["s2"]]$elev, NA)
             ),
             
-            Date = as.Date(Date),
-            DateStr = format(Date, "%Y%m%d"),
-            Year = lubridate::year(Date),
-            #Month = lubridate::month(Date, label=TRUE, abbr=TRUE),
-            Month = as.factor(base::months(Date)),
+            # - time when sun rises and sets in the day
+            Sunrise = Sunrise,
+            #Sunrise = as.POSIXct(strptime(paste(DateStr,Sunrise), "%Y%m%d %H%M")),
+            # - sunset has some instances where min is 60 (range is 0-59)
+            SunsetMin = as.numeric(stringr::str_sub(Sunset,-2,-1)),
+            SunsetHr = as.numeric(stringr::str_sub(Sunset,1,2)),
+            Sunset = ifelse(
+                SunsetMin==60 && SunsetHr<23,
+                paste(sprintf("%02d",SunsetHr+1), "00", sep=""),
+                ifelse(SunsetMin==60 && SunsetHr==23, "2359", Sunset)),
+            #Sunset = as.POSIXct(strptime(paste(DateStr,Sunset), "%Y%m%d %H%M")),            
             
+            # - temperature
             Tmax = as.numeric(Tmax),
             Tmin = as.numeric(Tmin),
             Tavg = as.numeric(Tavg),
-            
+            # - departure from normal (for temp?)
             Depart = as.numeric(Depart),
             
             # - temp at which the air can no longer hold all of the water 
@@ -109,11 +132,11 @@ load_weather <- function(file_path)
             #   always be <= the temp
             WetBulb = as.numeric(WetBulb),
             
+            # - ???
             Heat = as.integer(Heat),
             Cool = as.integer(Cool),
             
-            Sunrise = Sunrise,
-            Sunset = Sunset,
+            # - weather phenoena
             CodeSum = CodeSum,
             
             # - snow depth?
@@ -121,6 +144,7 @@ load_weather <- function(file_path)
             # - all missing values
             Water1 = Water1,
             SnowFall = as.numeric(SnowFall),
+            # - 
             PrecipTotal = as.numeric(PrecipTotal),
             # - station pressure?
             StnPressure = as.numeric(StnPressure),
@@ -129,9 +153,114 @@ load_weather <- function(file_path)
             ResultSpeed = as.numeric(ResultSpeed),
             # - resultant direction
             ResultDir = as.numeric(ResultDir),
-            
+            # - 
             AvgSpeed = as.numeric(AvgSpeed)
+        ) %>%
+        dplyr::select(
+            # - all values are na
+            -Water1,
+            # - helper variables
+            -SunsetMin, -SunsetHr
         )
+    
+    # - impute missing values
+    if (impute==TRUE)
+    {
+        # - impute: create data that can be joined on itself using flipped station
+        df_data_flip <- df_data %>%
+            dplyr::select(
+                DateStr, StationFlip, Tavg, Heat, Cool, WetBulb, StnPressure,
+                SeaLevel, AvgSpeed, PrecipTotal, Sunrise, Sunset, Depart, Depth,
+                SnowFall, CodeSum
+            ) %>%
+            dplyr::rename(
+                TavgFlip=Tavg, 
+                HeatFlip=Heat, 
+                CoolFlip=Cool, 
+                WetBulbFlip=WetBulb,
+                StnPressureFlip=StnPressure,
+                SeaLevelFlip=SeaLevel,
+                AvgSpeedFlip=AvgSpeed,
+                PrecipTotalFlip=PrecipTotal,
+                SunriseFlip=Sunrise, 
+                SunsetFlip=Sunset,
+                DepartFlip=Depart,
+                DepthFlip=Depth,
+                SnowFallFlip=SnowFall,
+                CodeSumFlip=CodeSum
+            )
+        
+        # - impute: data based on other weather station
+        df_data2 <- df_data %>%
+            dplyr::arrange(Station, DateStr) %>%
+            dplyr::left_join(
+                df_data_flip,
+                by=c("DateStr", "Station"="StationFlip")
+            ) %>%
+            dplyr::mutate(
+                Tavg = ifelse(is.na(Tavg), TavgFlip, Tavg),
+                Heat = ifelse(is.na(Heat), HeatFlip, Heat),
+                Cool = ifelse(is.na(Cool), CoolFlip, Cool),
+                WetBulb = ifelse(is.na(WetBulb), WetBulbFlip, WetBulb),
+                StnPressure = ifelse(is.na(StnPressure), StnPressureFlip, StnPressure),
+                SeaLevel = ifelse(is.na(SeaLevel), SeaLevelFlip, SeaLevel),
+                AvgSpeed = ifelse(is.na(AvgSpeed), AvgSpeedFlip, AvgSpeed),
+                PrecipTotal = ifelse(is.na(PrecipTotal), PrecipTotalFlip, PrecipTotal),
+                Sunrise = ifelse(is.na(Sunrise), SunriseFlip, Sunrise),
+                Sunset = ifelse(is.na(Sunset), SunsetFlip, Sunset),
+                Depart = ifelse(is.na(Depart), DepartFlip, Depart),
+                Depth = ifelse(is.na(Depth), DepthFlip, Depth),
+                SnowFall = ifelse(is.na(SnowFall), SnowFallFlip, SnowFall),
+                CodeSum = ifelse(is.na(CodeSum), CodeSumFlip, CodeSum)
+            ) %>%
+            dplyr::select(
+                -TavgFlip, -HeatFlip, -CoolFlip, -WetBulbFlip, -StnPressureFlip,
+                -SeaLevelFlip, -AvgSpeedFlip, -PrecipTotalFlip, -SunriseFlip,
+                -SunsetFlip, -DepartFlip, -DepthFlip, -SnowFallFlip, -CodeSumFlip
+            )
+        
+        # - impute: data based on 1d lookback
+        df_data3 <- df_data2 %>%
+            dplyr::group_by(Station) %>%
+            dplyr::mutate(
+                StnPressure = ifelse(is.na(StnPressure), lag(StnPressure,1), StnPressure),
+                # - two values in a row are na
+                SnowFall = ifelse(is.na(SnowFall), lag(SnowFall,1), SnowFall),
+                SnowFall = ifelse(is.na(SnowFall), lag(SnowFall,1), SnowFall),
+                PrecipTotal = ifelse(is.na(PrecipTotal), lag(PrecipTotal,1), PrecipTotal),
+                PrecipTotal = ifelse(is.na(PrecipTotal), lag(PrecipTotal,1), PrecipTotal),
+                CodeSum = ifelse(is.na(CodeSum), lag(CodeSum,1), CodeSum)
+            ) %>%
+            dplyr::ungroup()
+        
+        # - CodeSum Still have 872 missing values
+        #   removing since i dont see a current use for it
+        df_data3 <- df_data3 %>% dplyr::select(-CodeSum)
+        
+        # -  columns with NAs
+        #before <- sapply(df_data, function(x) sum(is.na(x)))
+        #after2 <- sapply(df_data2, function(x) sum(is.na(x)))
+        #after3 <- sapply(df_data3, function(x) sum(is.na(x)))
+        #rbind(before, after2, after3)
+        
+        # - debug
+        #sum(sapply(df_data, function(x) sum(is.na(x))))
+        #sum(sapply(df_data2, function(x) sum(is.na(x))))
+        #df_data3[is.na(df_data3$SnowFall),]
+        #dplyr::filter(df_data3, DateStr %in% c("20081026","20081027","20081028"))
+        #View(df_data2[is.na(df_data2$CodeSum),])
+        
+        # - for return
+        df_data <- as.data.frame(df_data3)
+        
+        # - clean up
+        rm(df_data2, df_data3)
+    }
+    
+    # - update sunrise and sunset to dateTimes
+    #   the imputation was causing them to become numeric (not sure why yet)
+    df_data$Sunrise = with(df_data, as.POSIXct(strptime(paste(DateStr,Sunrise), "%Y%m%d %H%M")))
+    df_data$Sunset = with(df_data, as.POSIXct(strptime(paste(DateStr,Sunset), "%Y%m%d %H%M")))
     
     # - return data set
     invisible(df_data)
@@ -139,7 +268,7 @@ load_weather <- function(file_path)
 
 
 # - loader: training data set
-load_train <- function(file_path)
+load_train <- function(file_path, collapse=TRUE)
 {
     # - check argument
     if( missing(file_path) )
@@ -171,7 +300,8 @@ load_train <- function(file_path)
                 NumMosquitos = col_integer(),
                 # - 1: west nile present, 0: not present
                 WnvPresent = col_integer()
-            )
+            ),
+            progress = FALSE
         ) %>%
         dplyr::mutate(
             # - not doing this in read_csv since need to specify levels
@@ -193,8 +323,34 @@ load_train <- function(file_path)
             SatelliteTrap = 1 * !grepl("[0-9]", stringr::str_sub(Trap,-1))
         )
     
-    # - closest weather station (not vectorized, very slow)
+    # - closest weather station to trap location (not vectorized, very slow)
     df_data$Station = mapply(get_closest_station, df_data$Longitude, df_data$Latitude)
+    
+    # - no missing values in training data that need to be imputed
+    #dim(na.omit(df_data)) == dim(df_data)
+    
+    # - collapsing data to distinct data / location / trap (move to udf!)
+    if (collapse==TRUE)
+    {
+        # - the data is organized so when the number of mosquitos >50 they split
+        #   into another record/row in the data. 
+        # - NumMosquitos is the number of mosquitoes caught in single trap
+        # - training data: dim:(10506x18) -> dim:(8610x18)
+        
+        df_data <- as.data.frame(
+            df_data %>%
+            dplyr::group_by(
+                Date,
+                Latitude, Longitude, Station,
+                Species, WnvPresent, WnvPresentF,
+                Address, Block, Street, AddressNumberAndStreet, AddressAccuracy, 
+                Trap, SatelliteTrap,
+                DateStr, Year, Month, Day, WkDay
+            ) %>%
+            dplyr::summarise(
+                NumMosquitos = sum(NumMosquitos, na.rm=T)
+            ))
+    }
     
     # - return data set
     invisible(df_data)
@@ -216,6 +372,9 @@ load_test <- function(file_path)
     require(stringr)        # - string manipulation
     require(lubridate)      # - dates
     
+    # - note that NumMosquitos is NOT included in the test set as it
+    #   is considered part of the test result
+    
     # - load data into memory with defined schema
     df_data <- 
         readr::read_csv(
@@ -232,7 +391,8 @@ load_test <- function(file_path)
                 Latitude = col_double(),
                 Longitude = col_double(),
                 AddressAccuracy = col_character()
-            )
+            ),
+            progress = FALSE
         ) %>%
         dplyr::mutate(
             # - prep the species column by moving the test-only UNSPECIFIED 
@@ -255,8 +415,11 @@ load_test <- function(file_path)
             WkDay = lubridate::wday(Date, label=TRUE, abbr=TRUE)
         )
     
-    # - closest weather station (not vectorized, very slow)
+    # - closest weather station to trap location (not vectorized, very slow)
     df_data$Station = mapply(get_closest_station, df_data$Longitude, df_data$Latitude)
+    
+    # - no missing values in training data that need to be imputed
+    #dim(na.omit(df_data)) == dim(df_data)
     
     # - return data set
     invisible(df_data)
@@ -359,13 +522,25 @@ get_closest_station <- function(lon, lat)
         return(NA)
     }
 }
+    
 
-
-# - create submission csv file
+# - create submission csv file (**under construction**)
 create_submission <- function(file_path_out, model_fit)
 {
+    if( missing(file_path_out) )
+    {
+        stop("argument \"file_path_out\" is missing")
+    }
+    if( missing(model_fit) )
+    {
+        stop("argument \"model_fit\" is missing")
+    }
+    
+    # - required libraries
+    require(dplyr)          # - data manipulation
+    
     # - load: sample submission
-    df_submission <- load_submission(path_data_submission)
+    df_submission <- load_submission(file_path_out)
     
     # - predict
     #   this assumes df_test_wthr is already loaded in memory!!!
@@ -376,4 +551,59 @@ create_submission <- function(file_path_out, model_fit)
     
     return(TRUE)
 }
+
+
+# - join train and weather data sets
+join_train_weather <- function()
+{
+    # - relying on data to already be in memory until i figure out how to
+    #   get around the no pass by reference
+    if( !exists("df_train") || !exists("df_weather") )
+    {
+        stop("df_train and df_weather must already exist in memory!")
+    }
+    
+    # - required libraries
+    require(dplyr)          # - data manipulation
+    
+    # - join data based on closest station
+    df_train_wthr <- as.data.frame(
+        df_train %>%
+        dplyr::left_join(
+            dplyr::select(df_weather, -Date,-Year,-Month,-Latitude,-Longitude), 
+            by=c("DateStr","Station")
+        ))
+    
+    # - return
+    invisible(df_train_wthr)
+}
+
+
+# - join test and weather data sets
+join_test_weather <- function()
+{
+    # - relying on data to already be in memory until i figure out how to
+    #   get around the no pass by reference
+    if( !exists("df_test") || !exists("df_weather") )
+    {
+        stop("df_test and df_weather must already exist in memory!")
+    }
+    
+    # - required libraries
+    require(dplyr)          # - data manipulation
+    
+    # - join data based on closest station
+    df_test_wthr <- as.data.frame(
+        df_test %>%
+        dplyr::left_join(
+            dplyr::select(df_weather, -Date,-Year,-Month,-Latitude,-Longitude), 
+            by=c("DateStr","Station")
+        ))
+    
+    # - return
+    invisible(df_test_wthr)
+}
+
+
+
 
