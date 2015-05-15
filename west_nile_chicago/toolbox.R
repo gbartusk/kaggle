@@ -127,12 +127,18 @@ load_weather <- function(file_path, impute=TRUE)
             
             # - temp at which the air can no longer hold all of the water 
             #   vapor which is mixed with it, always <= temp
+            # - dew point is a messure of relative humidity, at 100% the dew point
+            #   = the temp and air is max saturated, this causes it to feel very 
+            #   how since sweat will not evaporate and hence no cool effect
+            # - at low dew points, the air is dry and cause skin to crack
             DewPoint = as.numeric(DewPoint),
             # - lowest temp that can be reached by evaporating water into air,
-            #   always be <= the temp
+            #   always be <= the temp.
+            # - this is very similar to DewPoint (97% correlation)
             WetBulb = as.numeric(WetBulb),
             
-            # - ???
+            # - https://www.kaggle.com/c/predict-west-nile-virus/forums/t/14186/what-is-hot-day/78288#post78288
+            # - heat is this: http://en.wikipedia.org/wiki/Heating_degree_day
             Heat = as.integer(Heat),
             Cool = as.integer(Cool),
             
@@ -233,7 +239,7 @@ load_weather <- function(file_path, impute=TRUE)
             ) %>%
             dplyr::ungroup()
         
-        # - CodeSum Still have 872 missing values
+        # - CodeSum Still have 872 missing values (30%)
         #   removing since i dont see a current use for it
         df_data3 <- df_data3 %>% dplyr::select(-CodeSum)
         
