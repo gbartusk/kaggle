@@ -57,8 +57,8 @@ load_weather <- function(file_path, impute=TRUE)
     require(dplyr)      # - data manipulation
     require(stringr)    # - string manipulation
     
-    # - get weather station location data
-    #   note data is in long format with repeated dates for each station
+    # - get weather station location data (hardcoded location from instructions)
+    #   note: weather data is in long format with repeated dates for each station
     station_loc <- get_weather_station_local()
     
     # - debugging
@@ -139,6 +139,8 @@ load_weather <- function(file_path, impute=TRUE)
             
             # - https://www.kaggle.com/c/predict-west-nile-virus/forums/t/14186/what-is-hot-day/78288#post78288
             # - heat is this: http://en.wikipedia.org/wiki/Heating_degree_day
+            #   demand of energy needed to heat or cool a building, DERIVED from temp
+            # - aka as HDD=heating degree day and CDD
             Heat = as.integer(Heat),
             Cool = as.integer(Cool),
             
@@ -150,8 +152,10 @@ load_weather <- function(file_path, impute=TRUE)
             # - all missing values
             Water1 = Water1,
             SnowFall = as.numeric(SnowFall),
-            # - 
+            
+            # - rain in 24h period (inches)
             PrecipTotal = as.numeric(PrecipTotal),
+            
             # - station pressure?
             StnPressure = as.numeric(StnPressure),
             SeaLevel = as.numeric(SeaLevel),
@@ -256,6 +260,12 @@ load_weather <- function(file_path, impute=TRUE)
         #dplyr::filter(df_data3, DateStr %in% c("20081026","20081027","20081028"))
         #View(df_data2[is.na(df_data2$CodeSum),])
         
+        # - PrecipTotal has very large outliers, take log and add small amount
+        #   due to zero values (.01 is the smallest value >0)
+        #table(Hmisc::cut2(df_train_wthr$PrecipTotal,cuts=c(0,.1,.5,1,1.5,2,3.9)))
+        #range(df_weather$PrecipTotal[df_weather$PrecipTotal>0])
+        df_data3$PrecipTotalLog <- log(df_data3$PrecipTotal+.001)
+        
         # - for return
         df_data <- as.data.frame(df_data3)
         
@@ -324,7 +334,9 @@ load_train <- function(file_path, collapse=TRUE)
             #Month = lubridate::month(Date, label=TRUE, abbr=TRUE),
             Month = as.factor(base::months(Date)),
             Day = lubridate::mday(Date),
-            WkDay = lubridate::wday(Date, label=TRUE, abbr=TRUE),
+            # - this is creating ordered factors too!
+            #WkDay = lubridate::wday(Date, label=TRUE, abbr=TRUE),
+            WkDay = as.factor(base::weekdays(Date)),
             # - traps setup near an established trap to enhance surveillance
             SatelliteTrap = 1 * !grepl("[0-9]", stringr::str_sub(Trap,-1))
         )
@@ -418,7 +430,8 @@ load_test <- function(file_path)
             #Month = lubridate::month(Date, label=TRUE, abbr=TRUE),
             Month = as.factor(base::months(Date)),
             Day = lubridate::mday(Date),
-            WkDay = lubridate::wday(Date, label=TRUE, abbr=TRUE)
+            #WkDay = lubridate::wday(Date, label=TRUE, abbr=TRUE)
+            WkDay = as.factor(base::weekdays(Date))
         )
     
     # - closest weather station to trap location (not vectorized, very slow)
@@ -608,6 +621,124 @@ join_test_weather <- function()
     
     # - return
     invisible(df_test_wthr)
+}
+
+
+# - correlation pairs
+top_cor_pairs <- function(df, thresh)
+{
+    if( missing(df) )
+    {
+        stop("argument \"df\" is missing, with no default")
+    }
+    if( missing(thresh) )
+    {
+        stop("argument \"thresh\" is missing, with no default")
+    }
+    if ( thresh > 1 || thresh < 0 )
+    {
+        stop(paste0("argument \"thresh\" (",thresh,") must be in range [0,1]"))
+    }
+    
+    require(dplyr)
+    
+    # - construct correlation matrix and set diagonal (cor=1) to zero
+    corm <- cor(df)
+    diag(corm) <- 0
+    
+    # - filter for any pair greater than threshold
+    corm_filter <- which(abs(corm) > thresh, arr.ind=TRUE)
+    
+    # - create a data frame that indexes into the corr matrix
+    df_top_cor <- data.frame(
+        row=corm_filter[,"row"], 
+        row_name=rownames(corm_filter), 
+        col=corm_filter[,"col"], 
+        col_name=colnames(corm)[as.vector(corm_filter[,"col"])]
+    )
+    
+    # - create a key to allow us to filter distinct
+    #   ie we need to remove all the duplicated: cor(a,b) = cor(b,a)
+    df_top_cor$key = apply(
+        df_top_cor[,c("row","col")],
+        1, 
+        function(m) 
+            ifelse(m['row']<m['col'], paste(m['row'],m['col'],sep="_"),
+            paste(m['col'],m['row'],sep="_")))
+    
+    # - filter distinct correlations
+    df_top_cor <- dplyr::distinct(df_top_cor, key)
+    
+    # - insert correlation values into dataframe
+    df_top_cor$cor = apply(
+        df_top_cor[,c("row","col")],
+        1, 
+        function(m) round(corm[m['row'],m['col']]*100,2))
+    
+    # - clean up columns and sort
+    df_top_cor <- df_top_cor %>% 
+        dplyr::select(-key,-row,-col) %>%
+        dplyr::arrange(desc(cor))
+    
+    # - return
+    invisible(df_top_cor)
+}
+
+
+# - add pre-defined weather based PCA variables
+get_weather_pcas <- function(df, temp=TRUE, pres_lvl=TRUE, speed=TRUE)
+{
+    # - temp: Tmax, Tmin, Tavg, DewPoint, WetBulb
+    # - pres_lvl: StnPressure, SeaLevel
+    # - speed: ResultSpeed, AvgSpeed
+    
+    if( missing(df) )
+    {
+        stop("argument \"df\" is missing, with no default")
+    }
+    
+    require(caret)
+    require(dplyr)
+    
+    # - pca: temp
+    if ( temp == TRUE )
+    {
+        # - 1st PC:91%, 2nd PC: 97%
+        df_train_sub <- dplyr::select(df, Tmax, Tmin, Tavg, DewPoint, WetBulb)
+        pca_sub_obj <- caret::preProcess(df_train_sub, 
+            pcaComp=2, method=c("BoxCox", "center", "scale", "pca"))
+        pred_pca_sub <- predict(pca_sub_obj, df_train_sub)
+        df$PC1_temp <- pred_pca_sub$PC1
+        df$PC2_temp <- pred_pca_sub$PC2
+        rm(df_train_sub, pca_sub_obj, pred_pca_sub)
+    }
+    
+    # - pca: pressure and sea level
+    if ( pres_lvl == TRUE )
+    {
+        # - 1st PC: 98%
+        df_train_sub <- dplyr::select(df, StnPressure, SeaLevel)
+        pca_sub_obj <- caret::preProcess(df_train_sub, 
+            pcaComp=1, method=c("BoxCox", "center", "scale", "pca"))
+        pred_pca_sub <- predict(pca_sub_obj, df_train_sub)
+        df$PC1_pres_lvl <- pred_pca_sub[,1]
+        rm(df_train_sub, pca_sub_obj, pred_pca_sub)
+    }
+    
+    # - pca: speed
+    if ( speed == TRUE )
+    {
+        # - 1st PC: 95%
+        df_train_sub <- dplyr::select(df, ResultSpeed, AvgSpeed)
+        pca_sub_obj <- caret::preProcess(df_train_sub, 
+            pcaComp=1, method=c("BoxCox", "center", "scale", "pca"))
+        pred_pca_sub <- predict(pca_sub_obj, df_train_sub)
+        df$PC1_speed <- pred_pca_sub[,1]
+        rm(df_train_sub, pca_sub_obj, pred_pca_sub)
+    }
+    
+    # - return
+    invisible(df)
 }
 
 
