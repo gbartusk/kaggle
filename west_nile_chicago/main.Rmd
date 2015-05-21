@@ -53,6 +53,7 @@ library(pryr)           # - check memory
 library(rpart)          # - regression trees
 library(rattle)         # - regression tree plots
 library(gbm)            # - boosting with trees
+library(party)          # - conditional influence trees
 library(gam)            # - generalized additive models
 library(e1071)          # - support vector machines
 library(ROCR)           # - roc curves
@@ -89,6 +90,9 @@ df_spray <- load_spray(path_data_spray)
 # - load: weather data
 df_weather <- load_weather(path_data_weather, impute=TRUE)
 
+# - *** should we stack test and train for doing the processing??? ***
+#   since we are applying the same rules to both
+
 # - load: training data
 df_train <- load_train(path_data_train, collapse=TRUE)
 
@@ -106,6 +110,7 @@ df_train_wthr <- join_train_weather()
 df_test_wthr <- join_test_weather()
 
 # - validation set
+set.seed(123)
 train_index <- caret::createDataPartition(y=df_train_wthr$WnvPresent, p=0.8, list=FALSE)
 df_train_wthr_fit <- df_train_wthr[train_index,]
 df_train_wthr_val <- df_train_wthr[-train_index,]
@@ -176,6 +181,13 @@ t_wnv_by_wday <- table(df_train$WkDay, df_train$WnvPresentF)
 t_wnv_by_wday
 round(prop.table(t_wnv_by_wday)*100,2)
 
+# - Sunrise (always comes up as valid in regressions? ... corr with month!)
+aggregate(WnvPresent ~ Hmisc::cut2(SunriseNum,g=10), data=df_train_wthr, FUN=sum)
+with(df_train_wthr, table(Hmisc::cut2(SunriseNum,g=10), Month))
+
+
+# - Sunset: only one value
+
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # - spay dates
@@ -192,8 +204,20 @@ table(df_weather$Month, df_weather$Year)
 
 # - wnv by temp and month
 table(df_train_wthr$WnvPresentF, Hmisc::cut2(df_train_wthr$Tmax, g=5), df_train_wthr$Month)
+aggregate(WnvPresent ~ Hmisc::cut2(df_train_wthr$Tmax, g=5) + Month, data=df_train_wthr, FUN=function(x) {sum(x)/length(x)*100})
+
+# - 
+prop.table(table(Hmisc::cut2(df_train_wthr$Tmax, g=10), df_train_wthr$WnvPresentF),2)*100
 
 
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# - decision trees
+
+fit_rpart <- rpart(WnvPresent ~ Latitude + Latitude + Block + Month + PC1_temp + PC2_temp + PC1_pres_lvl + PC1_speed + PrecipTotalLog, data=df_train_wthr, method="class", control=rpart.control(minsplit=34, cp=0, xval=5))
+fit_rpart
+plot(fit_rpart)
+text(fit_rpart)
+rattle::fancyRpartPlot(fit_rpart)
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # - clean up
@@ -284,7 +308,7 @@ ggmap(g_roadmap) +
 # - plot: wnv across months
 #   august appears very significant (compared to july and september), most
 #   likely because thats when its the hotest?
-ggmap(g_roadmap) +
+ggmap(gmap_chicago) +
     geom_point(data=df_train, aes(x=Longitude, y=Latitude, 
         colour=WnvPresentF, size=NumMosquitos), alpha=0.2) +
     facet_grid(WnvPresentF~Month) +
@@ -339,10 +363,23 @@ g_AvgSpeed <- ggplot(data=df_train_wthr, aes(x=WnvPresentF, y=AvgSpeed, colour=W
 # - wnv by Elevation: more wnv at low or high elevation (see denisity plot)
 g_Elevation <- ggplot(data=df_train_wthr, aes(x=WnvPresentF, y=Elevation, colour=WnvPresentF)) + geom_boxplot() + stat_summary(fun.y=mean, geom="point", shape=5, size=4) + stat_summary(fun.y=mean, geom="line", aes(group=1), colour="black") + theme(axis.title.x = element_blank(), legend.position='none')
 
+# - 
+g_PC1_temp <- ggplot(data=df_train_wthr, aes(x=WnvPresentF, y=PC1_temp, colour=WnvPresentF)) + geom_boxplot() + stat_summary(fun.y=mean, geom="point", shape=5, size=4) + stat_summary(fun.y=mean, geom="line", aes(group=1), colour="black") + theme(axis.title.x = element_blank(), legend.position='none')
+# - 
+g_PC2_temp <- ggplot(data=df_train_wthr, aes(x=WnvPresentF, y=PC2_temp, colour=WnvPresentF)) + geom_boxplot() + stat_summary(fun.y=mean, geom="point", shape=5, size=4) + stat_summary(fun.y=mean, geom="line", aes(group=1), colour="black") + theme(axis.title.x = element_blank(), legend.position='none')
+# - 
+g_PC1_pres_lvl <- ggplot(data=df_train_wthr, aes(x=WnvPresentF, y=PC1_pres_lvl, colour=WnvPresentF)) + geom_boxplot() + stat_summary(fun.y=mean, geom="point", shape=5, size=4) + stat_summary(fun.y=mean, geom="line", aes(group=1), colour="black") + theme(axis.title.x = element_blank(), legend.position='none')
+# - 
+g_PC1_speed <- ggplot(data=df_train_wthr, aes(x=WnvPresentF, y=PC1_speed, colour=WnvPresentF)) + geom_boxplot() + stat_summary(fun.y=mean, geom="point", shape=5, size=4) + stat_summary(fun.y=mean, geom="line", aes(group=1), colour="black") + theme(axis.title.x = element_blank(), legend.position='none')
+# - 
+g_PrecipTotalLog <- ggplot(data=df_train_wthr, aes(x=WnvPresentF, y=PrecipTotalLog, colour=WnvPresentF)) + geom_boxplot() + stat_summary(fun.y=mean, geom="point", shape=5, size=4) + stat_summary(fun.y=mean, geom="line", aes(group=1), colour="black") + theme(axis.title.x = element_blank(), legend.position='none')
+
+
 # - plot: grids based on correlation groupings
 gridExtra::grid.arrange(g_Tmin, g_Tavg, g_Tmax, g_DewPoint, g_WetBulb, g_Cool, nrow=1)
 gridExtra::grid.arrange(g_StnPressure, g_SeaLevel, nrow=1)
 gridExtra::grid.arrange(g_ResultSpeed, g_AvgSpeed, nrow=1)
+gridExtra::grid.arrange(g_PC1_temp, g_PC2_temp, g_PC1_pres_lvl, g_PC1_speed, g_PrecipTotalLog, nrow=1)
 
 # - lots of outliers - apply log transform to normalize
 g_PrecipTotal
@@ -387,10 +424,26 @@ summary(prcomp(df_train_wthr_pca_x, scale=T, center = T))
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # - pca: temp (1st PC:91, 2nd PC: 97%)
+
+# - limit data set
 df_train_temp <- dplyr::select(df_train_wthr_pca, Tmax, Tmin, Tavg, DewPoint, WetBulb)
-prcomp(df_train_temp, center=T, scale=T); summary(prcomp(df_train_temp, center=T, scale=T))
+
+# - inspect - need to scale, otherwise Tmax (which has the largest mean and var)
+#   will drive most of the PCA
+apply(df_train_temp, 2, mean)   # variables have different means
+apply(df_train_temp, 2, var)
+
+# - scree and biplots (center: zero mean, scale: unit std dev)
+pr_obj <- prcomp(df_train_temp, center=T, scale=T) 
+# - pc loadings and variance explained
+pr_obj; summary(pr_obj); screeplot(pr_obj)
+# - biplot: scale=0 ensures that the arrows are scaled to represent the loadings
+biplot(pr_obj, scale=0)
+
+
+# - 
 pca_temp_obj <- caret::preProcess(df_train_temp, thresh=0.95, method=c("BoxCox", "center", "scale", "pca"))
-pred_pca_temp <- predict(pca_temp_obj, df_train_temp)
+pred_pca_temp <- predict(pca_emp_obj, df_train_temp)
 qplot(x=PC1, y=PC2, data=pred_pca_temp, colour=df_train_wthr$WnvPresentF)
 
 
@@ -434,6 +487,29 @@ cm_pca_train
 ```
 
 
+```{r clustering}
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# - k-means
+df_train_all <- df_train_wthr %>% dplyr::select(Latitude,Longitude)
+
+km_out <- kmeans(df_train_all, 4, nstart=20)
+plot(df_train_all, col=(km_out$cluster+1))
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# - hierarchical
+
+# - can only use numeric data!
+df_train_all <- df_train_wthr %>% dplyr::select(Latitude, Longitude, PC1_temp, PC2_temp, PC1_speed)
+
+hc_complete <- hclust(dist(df_train_all), method="complete")
+plot(hc_complete)
+cuttree(hc_complete, 2)
+
+
+```
+
+
 ## Modeling
 
 *__Logistic__*:
@@ -452,18 +528,9 @@ set.seed(123)
 
 
 # - create cross validation set within training set
-train_index <- caret::createDataPartition(y=df_train_wthr$WnvPresent, p=0.8, list=FALSE, times=1)
-df_train_fit <- df_train_wthr[train_index,]
-df_train_val <-  df_train_wthr[-train_index,]
-rm(train_index)
-# - check proportions
-prop.table(table(df_train_wthr$WnvPresentF))*100
-prop.table(table(df_train_fit$WnvPresentF))*100
-prop.table(table(df_train_val$WnvPresentF))*100
-
 
 # - stepwise regression
-df_train_fit_regs <- df_train_fit %>% dplyr::select(-WnvPresentF, -Address, -Street, -AddressNumberAndStreet, -AddressAccuracy, -DateStr, -WkDay, -Trap, -Date, -NumMosquitos)
+df_train_fit_regs <- df_train_wthr_fit %>% dplyr::select(-WnvPresentF, -Address, -Street, -AddressNumberAndStreet, -AddressAccuracy, -DateStr, -WkDay, -Trap, -Date, -NumMosquitos)
 # - na vaues will 
 fit_all <- glm(WnvPresent ~ ., data=df_train_fit, family="binomial")
 step <- stepAIC(fit_all, direction="both", trace=0)
@@ -473,38 +540,86 @@ glmStepAIC
 fit_logit_step <- caret::train(WnvPresent ~ ., data=df_train_fit_regs, method="glmStepAIC", family="binomial")
 
 
-# - fit: logistic model
-# - For example, in problems where there are a low percentage of samples in one class, using metric = "Kappa" can improve quality of the final model.
-train_ctrl <- trainControl(method = "repeatedcv", number = 10, repeats=3)
-fit_logit <- caret::train(WnvPresentF ~ Latitude + Longitude + Latitude*Longitude + Year + Month + Day + Tmax + I(Tmax^2) + PrecipTotal + I(PrecipTotal^2) + DewPoint + I(DewPoint^2) + Species + SeaLevel, data=df_train_fit, method="glm", family="binomial", trControl = train_ctrl)
-# - print model
-fit_logit
-summary(fit_logit$finalModel)
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# - Logistic
 
-# - roc / accuracy: train fit
-pred_logit_train <- predict(fit_logit, newdata=df_train_fit, type="prob")[,"present"]
-Metrics::auc(df_train_fit$WnvPresent, pred_logit_train)
-caret::confusionMatrix(df_train_fit$WnvPresentF, predict(fit_logit, newdata=df_train_fit))
+#- add weights to account for wnv imblance
+w <- 1
+df_train_wthr_fit$Weight <- ifelse(df_train_wthr_fit$WnvPresent==1,w,1)
+df_train_wthr$Weight <- ifelse(df_train_wthr$WnvPresent==1,w,1)
+
+# - fit: train
+set.seed(123)
+fit_logit <- glm(WnvPresentF ~ Latitude*Longitude + Species + PC1_temp*PrecipTotalLog + Month + WkDay + PC1_pres_lvl + SunriseNum, family="binomial", weights=Weight, data=df_train_wthr_fit)
+# - print model
+summary(fit_logit)
+
+# - roc / accuracy: train
+pred_logit_train <- predict(fit_logit, newdata=df_train_wthr_fit, type="response")
+Metrics::auc(df_train_wthr_fit$WnvPresent, pred_logit_train)
+caret::confusionMatrix(df_train_wthr_fit$WnvPresent, ifelse(pred_logit_train>0.5,1,0))
 
 # - roc / accuracy: validation
-pred_logit_val <- predict(fit_logit, newdata=df_train_val, type="prob")[,"present"]
-Metrics::auc(df_train_val$WnvPresent, pred_logit_val)
-caret::confusionMatrix(df_train_val$WnvPresentF, predict(fit_logit, newdata=df_train_val))
+#df_train_wthr_val$Species <- plyr::revalue(df_train_wthr_val$Species, c("CULEX ERRATICUS"="CULEX PIPIENS/RESTUANS"))
+pred_logit_val <- predict(fit_logit, newdata=df_train_wthr_val, type="response")
+Metrics::auc(df_train_wthr_val$WnvPresent, pred_logit_val)
+caret::confusionMatrix(df_train_wthr_val$WnvPresent, ifelse(pred_logit_val>0.5,1,0))
 
-# - fit: refit the model on all data
-fit_logit_all <- caret::train(WnvPresentF ~ Latitude + Longitude + Latitude*Longitude + Year + Month + Day + Tmax + I(Tmax^2) + PrecipTotal + I(ln(PrecipTotal)) + DewPoint + I(DewPoint^2) + Species + SeaLevel, data=df_train_wthr, method="glm", family="binomial", trControl=train_ctrl)
+# - fit: train + vaidation
+fit_logit_all <- glm(WnvPresentF ~ Latitude*Longitude + Species + PC1_temp*PrecipTotalLog + Month + WkDay + PC1_pres_lvl + SunriseNum, family="binomial", weights=Weight, data=df_train_wthr)
+summary(fit_logit_all)
 
-# - roc / accuracy: train all
-pred_logit_all <- predict(fit_logit_all, newdata=df_train_wthr, type="prob")[,"present"]
+# - roc / accuracy: train + vaidation
+pred_logit_all <- predict(fit_logit_all, newdata=df_train_wthr, type="response")
 Metrics::auc(df_train_wthr$WnvPresent, pred_logit_all)
-caret::confusionMatrix(df_train_wthr$WnvPresentF, predict(fit_logit_all, newdata=df_train_wthr))
+caret::confusionMatrix(df_train_wthr$WnvPresent, ifelse(pred_logit_all>0.5,1,0))
 
 # - create submission file
 df_submission <- load_submission(path_data_submission)
-df_submission$WnvPresent <- predict(fit_logit_all, newdata=df_test_wthr, type="prob")[,"present"]
-path_submit <- file.path(dir_submissions, "#_step_logistic_CV.csv")
+df_submission$WnvPresent <- predict(fit_logit_all, newdata=df_test_wthr, type="response")
+path_submit <- file.path(dir_submissions, "logistic.csv")
 readr::write_csv(df_submission, path_submit)
 
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# - Penalized Logistic
+
+# - http://stats.stackexchange.com/questions/11109/how-to-deal-with-perfect-separation-in-logistic-regression
+
+library(glmnet)
+library(logistf)
+library(brglm)
+library(arm)
+
+# - fit: train / bayes
+set.seed(123)
+fit_logit_bayes <- arm::bayesglm(WnvPresentF ~ Latitude*Longitude + Species + PC1_temp*PrecipTotalLog + Month + WkDay + PC1_pres_lvl + SunriseNum, family="binomial", weights=Weight, data=df_train_wthr_fit)
+summary(fit_logit_bayes)
+
+# - roc / accuracy: train
+pred_logit_bayes_train <- predict(fit_logit_bayes, newdata=df_train_wthr_fit, type="response")
+Metrics::auc(df_train_wthr_fit$WnvPresent, pred_logit_bayes_train)
+caret::confusionMatrix(df_train_wthr_fit$WnvPresent, ifelse(pred_logit_bayes_train>0.5,1,0))
+
+# - roc / accuracy: validation
+pred_logit_bayes_val <- predict(fit_logit_bayes, newdata=df_train_wthr_val, type="response")
+Metrics::auc(df_train_wthr_val$WnvPresent, pred_logit_bayes_val)
+caret::confusionMatrix(df_train_wthr_val$WnvPresent, ifelse(pred_logit_bayes_val>0.5,1,0))
+
+# - fit: train + vaidation
+fit_logit_bayes_all <- arm::bayesglm(WnvPresentF ~ Latitude*Longitude + Species + PC1_temp*PrecipTotalLog + Month + WkDay + PC1_pres_lvl + SunriseNum, family="binomial", weights=Weight, data=df_train_wthr)
+summary(fit_logit_bayes_all)
+
+# - roc / accuracy: train + vaidation
+pred_logit_bayes_all <- predict(fit_logit_bayes_all, newdata=df_train_wthr, type="response")
+Metrics::auc(df_train_wthr$WnvPresent, pred_logit_bayes_all)
+caret::confusionMatrix(df_train_wthr$WnvPresent, ifelse(pred_logit_bayes_all>0.5,1,0))
+
+# - create submission file
+df_submission <- load_submission(path_data_submission)
+df_submission$WnvPresent <- predict(fit_logit_bayes_all, newdata=df_test_wthr, type="response")
+path_submit <- file.path(dir_submissions, "logistic.csv")
+readr::write_csv(df_submission, path_submit)
 
 ```
 
@@ -561,17 +676,17 @@ colnames(df_train_fit_regs)[!(colnames(df_train_fit_regs) %in% colnames(df_test_
 # - Regression Tree
 
 # - fir regression tree ... only one break given so few wnv cases
-fit_rpart <- train(WnvPresentF ~ ., method="rpart", data=df_train_fit_regs)
-fit$finalModel
+fit_rpart <- train(WnvPresentF ~ ., method="rpart", data=df_train_wthr)
+fit_rpart$finalModel
 # - plot tree ... doesnt work with one break
-rattle::fancyRpartPlot(fit$finalModel)
+rattle::fancyRpartPlot(fit_rpart$finalModel)
 
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # - Random Forests
 
 # - fit: train 
-fit_rf <- train(WnvPresentF ~ ., method="rf", data=df_fit, importance=TRUE)
+fit_rf <- caret::train(WnvPresentF ~ , method="rf", data=df_fit, importance=TRUE)
 importance(fit_rf$finalModel)
 
 # - accuracy / auc: train
@@ -583,7 +698,7 @@ Metrics::auc(df_train_wthr_val$WnvPresent, predict(fit_rf, newdata=df_train_wthr
 caret::confusionMatrix(df_train_wthr_val$WnvPresentF, predict(fit_rf, newdata=df_train_wthr_val))
 
 # - fit: train + validation
-fit_rf_all <- train(WnvPresentF ~ ., method="rf", data=df_train_all, importance=TRUE)
+fit_rf_all <- caret::train(WnvPresentF ~ ., method="rf", data=df_train_all, importance=TRUE)
 
 # - accuracy / auc: train + validation
 Metrics::auc(df_train_wthr$WnvPresent, predict(fit_rf_all, newdata=df_train_wthr, type="prob")[,"present"])
@@ -601,7 +716,7 @@ readr::write_csv(df_submission, path_submit)
 # - Boosting
 
 # - fit:stochastic gradient boosting
-fit_gbm <- caret::train(WnvPresentF ~ Latitude*Longitude + Species + Year + PC1_temp + PC2_temp + PC1_speed + Sunrise, data=df_fit, method="gbm", verbose=F)
+fit_gbm <- caret::train(WnvPresentF ~ Latitude + Longitude + Species + Year + PC1_temp + PC2_temp + PC1_speed + Sunrise, data=df_fit, method="gbm", verbose=F)
 
 # - relative influence
 summary(fit_gbm)
@@ -626,6 +741,33 @@ df_submission <- load_submission(path_data_submission)
 df_submission$WnvPresent <- predict(fit_gbm_all, newdata=df_test_wthr, type="prob")[,"present"]
 path_submit <- file.path(dir_submissions, "gbm.csv")
 readr::write_csv(df_submission, path_submit)
+
+
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# - Testing
+
+# - fit: random forests
+library(randomForest)
+set.seed(415)
+fit_rf <- randomForest::randomForest(WnvPresentF ~ Latitude + Longitude + Species + PC1_temp + PrecipTotalLog + Month + WkDay + PC1_pres_lvl + SunriseNum, data=df_train_wthr_fit, importance=TRUE, ntree = 2000)
+varImpPlot(fit_rf)
+# - auc on train and val
+Metrics::auc(df_train_wthr_fit$WnvPresent, predict(fit_rf, newdata=df_train_wthr_fit))
+Metrics::auc(df_train_wthr_val$WnvPresent, predict(fit_rf, newdata=df_train_wthr_val))
+
+# - fit: forest of conditional influence trees
+#   conditional inference trees are able to handle factors with more levels than RFs
+library(party)
+set.seed(415)
+fit_cforest <- party::cforest(WnvPresentF ~ Latitude + Longitude + Species + PC1_temp + PrecipTotalLog + Month + WkDay + PC1_pres_lvl + SunriseNum, data=df_train_wthr_fit) #controls=cforest_unbiased(ntree=2000, mtry=3)
+# -
+fit_cforest
+# - auc on train and val
+pred_cp_fit <- predict(fit_cforest, newdata=df_train_wthr_fit, OOB=TRUE, type="response")
+Metrics::auc(df_train_wthr_fit$WnvPresent, pred_cp_fit)
+pred_cp_val <- predict(fit_cforest, newdata=df_train_wthr_val, OOB=TRUE, type="response")
+Metrics::auc(df_train_wthr_val$WnvPresent, pred_cp_val)
 
 
 ```

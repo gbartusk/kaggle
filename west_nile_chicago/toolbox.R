@@ -275,8 +275,15 @@ load_weather <- function(file_path, impute=TRUE)
     
     # - update sunrise and sunset to dateTimes
     #   the imputation was causing them to become numeric (not sure why yet)
-    df_data$Sunrise = with(df_data, as.POSIXct(strptime(paste(DateStr,Sunrise), "%Y%m%d %H%M")))
-    df_data$Sunset = with(df_data, as.POSIXct(strptime(paste(DateStr,Sunset), "%Y%m%d %H%M")))
+    df_data <- df_data %>% 
+        dplyr::mutate(
+            # - sunrise
+            Sunrise = as.POSIXct(strptime(paste(DateStr,Sunrise), "%Y%m%d %H%M")),
+            SunriseNum = as.numeric(format(Sunrise, "%H.%M")),
+            # - sunset
+            Sunset = as.POSIXct(strptime(paste(DateStr,Sunset), "%Y%m%d %H%M")),
+            SunsetNum = as.numeric(format(Sunset, "%H.%M"))
+        )
     
     # - return data set
     invisible(df_data)
