@@ -78,6 +78,9 @@ path_map_chicago_txt <- file.path(dir_data, "mapdata_copyright_openstreetmap_con
 # - load R src files
 source(path_src_toolbox)    # - udfs
 
+# - set seed
+set.seed(123)
+
 ```
 
 
@@ -104,27 +107,26 @@ df_test <- load_test(path_data_test)
 df_submission <- load_submission(path_data_submission)
 
 # - join: train and weather
-df_train_wthr <- join_train_weather()
+df_wthr_join_list <- join_train_test_to_weather()
+df_train_wthr <- df_wthr_join_list$train
+df_test_wthr <- df_wthr_join_list$test
 
-# - join: train and weather
-df_test_wthr <- join_test_weather()
+# - weather based pc
+df_pca_list <- get_weather_pcas()
+df_train_wthr <- df_pca_list$train
+df_test_wthr <- df_pca_list$test
 
 # - validation set
-set.seed(123)
 train_index <- caret::createDataPartition(y=df_train_wthr$WnvPresent, p=0.8, list=FALSE)
 df_train_wthr_fit <- df_train_wthr[train_index,]
 df_train_wthr_val <- df_train_wthr[-train_index,]
-rm(train_index)
 # - check proportions
 #table(df_train_wthr$WnvPresentF); prop.table(table(df_train_wthr$WnvPresentF))*100
 #table(df_train_wthr_fit$WnvPresentF); prop.table(table(df_train_wthr_fit$WnvPresentF))*100
 #table(df_train_wthr_val$WnvPresentF); prop.table(table(df_train_wthr_val$WnvPresentF))*100
 
-# - add weather based pca - ** FIX - CAN ONLY FIX PCs ON TRAINING! **
-df_train_wthr <- get_weather_pcas(df_train_wthr)
-df_test_wthr <- get_weather_pcas(df_test_wthr)
-df_train_wthr_fit <- get_weather_pcas(df_train_wthr_fit)
-df_train_wthr_val <- get_weather_pcas(df_train_wthr_val)
+# - clearn up
+rm(df_wthr_join_list, df_pca_list, train_index); gc()
 
 ```
 
@@ -175,6 +177,9 @@ round(prop.table(t_wnv_by_mo)*100,2)
 t_wnv_by_day <- table(df_train$Day, df_train$WnvPresentF)
 t_wnv_by_day
 round(prop.table(t_wnv_by_day)*100,2)
+
+# - wnv by date
+aggregate(WnvPresent ~ Date, data=df_train, FUN=sum)
 
 # - table wnv by weekday day
 t_wnv_by_wday <- table(df_train$WkDay, df_train$WnvPresentF)
@@ -363,22 +368,24 @@ g_AvgSpeed <- ggplot(data=df_train_wthr, aes(x=WnvPresentF, y=AvgSpeed, colour=W
 # - wnv by Elevation: more wnv at low or high elevation (see denisity plot)
 g_Elevation <- ggplot(data=df_train_wthr, aes(x=WnvPresentF, y=Elevation, colour=WnvPresentF)) + geom_boxplot() + stat_summary(fun.y=mean, geom="point", shape=5, size=4) + stat_summary(fun.y=mean, geom="line", aes(group=1), colour="black") + theme(axis.title.x = element_blank(), legend.position='none')
 
-# - 
-g_PC1_temp <- ggplot(data=df_train_wthr, aes(x=WnvPresentF, y=PC1_temp, colour=WnvPresentF)) + geom_boxplot() + stat_summary(fun.y=mean, geom="point", shape=5, size=4) + stat_summary(fun.y=mean, geom="line", aes(group=1), colour="black") + theme(axis.title.x = element_blank(), legend.position='none')
-# - 
-g_PC2_temp <- ggplot(data=df_train_wthr, aes(x=WnvPresentF, y=PC2_temp, colour=WnvPresentF)) + geom_boxplot() + stat_summary(fun.y=mean, geom="point", shape=5, size=4) + stat_summary(fun.y=mean, geom="line", aes(group=1), colour="black") + theme(axis.title.x = element_blank(), legend.position='none')
-# - 
-g_PC1_pres_lvl <- ggplot(data=df_train_wthr, aes(x=WnvPresentF, y=PC1_pres_lvl, colour=WnvPresentF)) + geom_boxplot() + stat_summary(fun.y=mean, geom="point", shape=5, size=4) + stat_summary(fun.y=mean, geom="line", aes(group=1), colour="black") + theme(axis.title.x = element_blank(), legend.position='none')
-# - 
-g_PC1_speed <- ggplot(data=df_train_wthr, aes(x=WnvPresentF, y=PC1_speed, colour=WnvPresentF)) + geom_boxplot() + stat_summary(fun.y=mean, geom="point", shape=5, size=4) + stat_summary(fun.y=mean, geom="line", aes(group=1), colour="black") + theme(axis.title.x = element_blank(), legend.position='none')
-# - 
-g_PrecipTotalLog <- ggplot(data=df_train_wthr, aes(x=WnvPresentF, y=PrecipTotalLog, colour=WnvPresentF)) + geom_boxplot() + stat_summary(fun.y=mean, geom="point", shape=5, size=4) + stat_summary(fun.y=mean, geom="line", aes(group=1), colour="black") + theme(axis.title.x = element_blank(), legend.position='none')
-
-
 # - plot: grids based on correlation groupings
 gridExtra::grid.arrange(g_Tmin, g_Tavg, g_Tmax, g_DewPoint, g_WetBulb, g_Cool, nrow=1)
 gridExtra::grid.arrange(g_StnPressure, g_SeaLevel, nrow=1)
 gridExtra::grid.arrange(g_ResultSpeed, g_AvgSpeed, nrow=1)
+
+# - wnv by pc1 on temp
+g_PC1_temp <- ggplot(data=df_train_wthr, aes(x=WnvPresentF, y=PC1_temp, colour=WnvPresentF)) + geom_boxplot() + stat_summary(fun.y=mean, geom="point", shape=5, size=4) + stat_summary(fun.y=mean, geom="line", aes(group=1), colour="black") + theme(axis.title.x = element_blank(), legend.position='none')
+# - wnv by pc2 on temp
+g_PC2_temp <- ggplot(data=df_train_wthr, aes(x=WnvPresentF, y=PC2_temp, colour=WnvPresentF)) + geom_boxplot() + stat_summary(fun.y=mean, geom="point", shape=5, size=4) + stat_summary(fun.y=mean, geom="line", aes(group=1), colour="black") + theme(axis.title.x = element_blank(), legend.position='none')
+# - wnv by pc1 on stn pressure and sea level
+g_PC1_pres_lvl <- ggplot(data=df_train_wthr, aes(x=WnvPresentF, y=PC1_pres_lvl, colour=WnvPresentF)) + geom_boxplot() + stat_summary(fun.y=mean, geom="point", shape=5, size=4) + stat_summary(fun.y=mean, geom="line", aes(group=1), colour="black") + theme(axis.title.x = element_blank(), legend.position='none')
+# - wind speed
+g_PC1_speed <- ggplot(data=df_train_wthr, aes(x=WnvPresentF, y=PC1_speed, colour=WnvPresentF)) + geom_boxplot() + stat_summary(fun.y=mean, geom="point", shape=5, size=4) + stat_summary(fun.y=mean, geom="line", aes(group=1), colour="black") + theme(axis.title.x = element_blank(), legend.position='none')
+# - precipitation
+g_PrecipTotalLog <- ggplot(data=df_train_wthr, aes(x=WnvPresentF, y=PrecipTotalLog, colour=WnvPresentF)) + geom_boxplot() + stat_summary(fun.y=mean, geom="point", shape=5, size=4) + stat_summary(fun.y=mean, geom="line", aes(group=1), colour="black") + theme(axis.title.x = element_blank(), legend.position='none')
+
+
+
 gridExtra::grid.arrange(g_PC1_temp, g_PC2_temp, g_PC1_pres_lvl, g_PC1_speed, g_PrecipTotalLog, nrow=1)
 
 # - lots of outliers - apply log transform to normalize
@@ -523,10 +530,6 @@ cuttree(hc_complete, 2)
 #   > 
 
 
-# - set seed for reproducibility
-set.seed(123)
-
-
 # - create cross validation set within training set
 
 # - stepwise regression
@@ -544,13 +547,12 @@ fit_logit_step <- caret::train(WnvPresent ~ ., data=df_train_fit_regs, method="g
 # - Logistic
 
 #- add weights to account for wnv imblance
-w <- 1
+w <- 2
 df_train_wthr_fit$Weight <- ifelse(df_train_wthr_fit$WnvPresent==1,w,1)
 df_train_wthr$Weight <- ifelse(df_train_wthr$WnvPresent==1,w,1)
 
 # - fit: train
-set.seed(123)
-fit_logit <- glm(WnvPresentF ~ Latitude*Longitude + Species + PC1_temp*PrecipTotalLog + Month + WkDay + PC1_pres_lvl + SunriseNum, family="binomial", weights=Weight, data=df_train_wthr_fit)
+fit_logit <- glm(WnvPresentF ~ Latitude*Longitude + Species + PC1_temp*PrecipTotalLog + I(PC1_temp^2) + I(PrecipTotalLog^2) + Month + WkDay + PC1_pres_lvl + I(PC1_pres_lvl^2) + SunriseNum + I(SunriseNum^2), family="binomial", weights=Weight, data=df_train_wthr_fit)
 # - print model
 summary(fit_logit)
 
@@ -566,7 +568,7 @@ Metrics::auc(df_train_wthr_val$WnvPresent, pred_logit_val)
 caret::confusionMatrix(df_train_wthr_val$WnvPresent, ifelse(pred_logit_val>0.5,1,0))
 
 # - fit: train + vaidation
-fit_logit_all <- glm(WnvPresentF ~ Latitude*Longitude + Species + PC1_temp*PrecipTotalLog + Month + WkDay + PC1_pres_lvl + SunriseNum, family="binomial", weights=Weight, data=df_train_wthr)
+fit_logit_all <- glm(WnvPresentF ~ Latitude*Longitude + Species + PC1_temp*PrecipTotalLog + I(PC1_temp^2) + I(PrecipTotalLog^2) + Month + WkDay + PC1_pres_lvl + I(PC1_pres_lvl^2) + SunriseNum + I(SunriseNum^2), family="binomial", weights=Weight, data=df_train_wthr)
 summary(fit_logit_all)
 
 # - roc / accuracy: train + vaidation
@@ -592,7 +594,6 @@ library(brglm)
 library(arm)
 
 # - fit: train / bayes
-set.seed(123)
 fit_logit_bayes <- arm::bayesglm(WnvPresentF ~ Latitude*Longitude + Species + PC1_temp*PrecipTotalLog + Month + WkDay + PC1_pres_lvl + SunriseNum, family="binomial", weights=Weight, data=df_train_wthr_fit)
 summary(fit_logit_bayes)
 
@@ -749,7 +750,6 @@ readr::write_csv(df_submission, path_submit)
 
 # - fit: random forests
 library(randomForest)
-set.seed(415)
 fit_rf <- randomForest::randomForest(WnvPresentF ~ Latitude + Longitude + Species + PC1_temp + PrecipTotalLog + Month + WkDay + PC1_pres_lvl + SunriseNum, data=df_train_wthr_fit, importance=TRUE, ntree = 2000)
 varImpPlot(fit_rf)
 # - auc on train and val
@@ -759,7 +759,6 @@ Metrics::auc(df_train_wthr_val$WnvPresent, predict(fit_rf, newdata=df_train_wthr
 # - fit: forest of conditional influence trees
 #   conditional inference trees are able to handle factors with more levels than RFs
 library(party)
-set.seed(415)
 fit_cforest <- party::cforest(WnvPresentF ~ Latitude + Longitude + Species + PC1_temp + PrecipTotalLog + Month + WkDay + PC1_pres_lvl + SunriseNum, data=df_train_wthr_fit) #controls=cforest_unbiased(ntree=2000, mtry=3)
 # -
 fit_cforest

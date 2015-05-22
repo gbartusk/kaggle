@@ -273,16 +273,21 @@ load_weather <- function(file_path, impute=TRUE)
         rm(df_data2, df_data3)
     }
     
-    # - update sunrise and sunset to dateTimes
-    #   the imputation was causing them to become numeric (not sure why yet)
+    # - additional clean up post-imputation
     df_data <- df_data %>% 
         dplyr::mutate(
+            # - update sunrise and sunset to dateTimes
+            #   the imputation was causing them to become numeric (not sure why yet)
             # - sunrise
             Sunrise = as.POSIXct(strptime(paste(DateStr,Sunrise), "%Y%m%d %H%M")),
             SunriseNum = as.numeric(format(Sunrise, "%H.%M")),
             # - sunset
             Sunset = as.POSIXct(strptime(paste(DateStr,Sunset), "%Y%m%d %H%M")),
             SunsetNum = as.numeric(format(Sunset, "%H.%M"))
+        ) %>%
+        dplyr::select(
+            # - only needed for doing the imputing
+            -StationFlip
         )
     
     # - return data set
@@ -579,55 +584,59 @@ create_submission <- function(file_path_out, model_fit)
 }
 
 
-# - join train and weather data sets
-join_train_weather <- function()
+# - join train and test to weather (assumes data already in memory)
+join_train_test_to_weather <- function()
 {
     # - relying on data to already be in memory until i figure out how to
     #   get around the no pass by reference
-    if( !exists("df_train") || !exists("df_weather") )
+    if( !exists("df_train") || !exists("df_test") || !exists("df_weather") )
     {
-        stop("df_train and df_weather must already exist in memory!")
+        stop("df_train, df_test, and df_weather must already exist in memory!")
     }
     
     # - required libraries
     require(dplyr)          # - data manipulation
     
-    # - join data based on closest station
+    # - remove columns that are alread in train/test
+    df_wthr_sub <- df_weather %>%
+        dplyr::select(-Date,-Year,-Month,-Latitude,-Longitude)
+    
+    # - check weather data is daily spaced
+    t <- df_weather %>%
+        dplyr::mutate(Month=month(Date)) %>%
+        dplyr::group_by(Year, Month) %>%
+        dplyr::summarise(DaysObs=n_distinct(Date)) %>%
+        dplyr::mutate(
+            DaysAct=Hmisc::monthDays(as.Date(paste(Year,Month,1,sep="-"))),
+            DaysDiff = DaysObs - DaysAct)
+    #sum(t$DaysDiff)
+    
+    # - add lag dates: train
+    df_train2 <- df_train %>%
+        dplyr::mutate(
+            DateStr_1d = format(Date-1, "%Y%m%d"),
+            DateStr_2d = format(Date-2, "%Y%m%d"),
+            DateStr_3d = format(Date-3, "%Y%m%d"),
+            DateStr_5d = format(Date-5, "%Y%m%d"),
+            DateStr_7d = format(Date-7, "%Y%m%d"),
+            DateStr_9d = format(Date-9, "%Y%m%d"),
+            DateStr_14d = format(Date-14, "%Y%m%d")
+        )
+    
+    # - join: train
     df_train_wthr <- as.data.frame(
         df_train %>%
-        dplyr::left_join(
-            dplyr::select(df_weather, -Date,-Year,-Month,-Latitude,-Longitude), 
-            by=c("DateStr","Station")
-        ))
+        dplyr::left_join(df_wthr_sub, by=c("DateStr","Station"))
+    )
     
-    # - return
-    invisible(df_train_wthr)
-}
-
-
-# - join test and weather data sets
-join_test_weather <- function()
-{
-    # - relying on data to already be in memory until i figure out how to
-    #   get around the no pass by reference
-    if( !exists("df_test") || !exists("df_weather") )
-    {
-        stop("df_test and df_weather must already exist in memory!")
-    }
-    
-    # - required libraries
-    require(dplyr)          # - data manipulation
-    
-    # - join data based on closest station
+    # - join: test
     df_test_wthr <- as.data.frame(
         df_test %>%
-        dplyr::left_join(
-            dplyr::select(df_weather, -Date,-Year,-Month,-Latitude,-Longitude), 
-            by=c("DateStr","Station")
-        ))
+        dplyr::left_join(df_wthr_sub, by=c("DateStr","Station"))
+    )
     
     # - return
-    invisible(df_test_wthr)
+    invisible(list("train"=df_train_wthr, "test"=df_test_wthr))
 }
 
 
@@ -692,60 +701,113 @@ top_cor_pairs <- function(df, thresh)
 }
 
 
-# - add pre-defined weather based PCA variables
-get_weather_pcas <- function(df, temp=TRUE, pres_lvl=TRUE, speed=TRUE)
+# - add pre-defined weather based PCA variables (assumes data already in memory)
+get_weather_pcas <- function(temp=TRUE, pres_lvl=TRUE, speed=TRUE)
 {
     # - temp: Tmax, Tmin, Tavg, DewPoint, WetBulb
     # - pres_lvl: StnPressure, SeaLevel
     # - speed: ResultSpeed, AvgSpeed
-    
-    if( missing(df) )
+
+    # - relying on data to already be in memory
+    if( !exists("df_train_wthr") || !exists("df_test_wthr") )
     {
-        stop("argument \"df\" is missing, with no default")
+        stop("df_train_wthr and df_test_wthr must already exist in memory!")
     }
     
     require(caret)
     require(dplyr)
     
-    # - pca: temp
+    # - pca: temp (1st PC:91%, 2nd PC: 97%)
     if ( temp == TRUE )
     {
-        # - 1st PC:91%, 2nd PC: 97%
-        df_train_sub <- dplyr::select(df, Tmax, Tmin, Tavg, DewPoint, WetBulb)
+        # - limit data: train
+        df_train_sub <- df_train_wthr %>% 
+            dplyr::select(Tmax, Tmin, Tavg, DewPoint, WetBulb)
+        # - limit data: test
+        df_test_sub <- df_test_wthr %>% 
+            dplyr::select(Tmax, Tmin, Tavg, DewPoint, WetBulb)
+        
+        # - pca: train
+        #summary(prcomp(df_train_sub, scale=T, center=T))
         pca_sub_obj <- caret::preProcess(df_train_sub, 
             pcaComp=2, method=c("BoxCox", "center", "scale", "pca"))
-        pred_pca_sub <- predict(pca_sub_obj, df_train_sub)
-        df$PC1_temp <- pred_pca_sub$PC1
-        df$PC2_temp <- pred_pca_sub$PC2
-        rm(df_train_sub, pca_sub_obj, pred_pca_sub)
+        
+        # - predict: train
+        pred_pca_train <- predict(pca_sub_obj, df_train_sub)
+        # - predict: test (must use the same PC rotations as training data)
+        pred_pca_test <- predict(pca_sub_obj, df_test_sub)
+        
+        # - add vars: train
+        df_train_wthr$PC1_temp <- pred_pca_train$PC1
+        df_train_wthr$PC2_temp <- pred_pca_train$PC2
+        # - add to test set
+        df_test_wthr$PC1_temp <- pred_pca_test$PC1
+        df_test_wthr$PC2_temp <- pred_pca_test$PC2
+        
+        # - clean up
+        rm(df_train_sub, df_test_sub, pca_sub_obj, pred_pca_train, pred_pca_test)
     }
     
-    # - pca: pressure and sea level
+    # - pca: pressure and sea level (1st PC: 98%)
     if ( pres_lvl == TRUE )
-    {
-        # - 1st PC: 98%
-        df_train_sub <- dplyr::select(df, StnPressure, SeaLevel)
+    {   
+        # - limit data: train
+        df_train_sub <- df_train_wthr %>% 
+            dplyr::select(StnPressure, SeaLevel)
+        # - limit data: test
+        df_test_sub <- df_test_wthr %>% 
+            dplyr::select(StnPressure, SeaLevel)
+        
+        # - pca: train
+        #summary(prcomp(df_train_sub, scale=T, center=T))
         pca_sub_obj <- caret::preProcess(df_train_sub, 
             pcaComp=1, method=c("BoxCox", "center", "scale", "pca"))
-        pred_pca_sub <- predict(pca_sub_obj, df_train_sub)
-        df$PC1_pres_lvl <- pred_pca_sub[,1]
-        rm(df_train_sub, pca_sub_obj, pred_pca_sub)
+        
+        # - predict: train
+        pred_pca_train <- predict(pca_sub_obj, df_train_sub)
+        # - predict: test (must use the same PC rotations as training data)
+        pred_pca_test <- predict(pca_sub_obj, df_test_sub)
+        
+        # - add vars: train
+        df_train_wthr$PC1_pres_lvl <- pred_pca_train[,1]
+        # - add to test set
+        df_test_wthr$PC1_pres_lvl <- pred_pca_test[,1]
+        
+        # - clean up
+        rm(df_train_sub, df_test_sub, pca_sub_obj, pred_pca_train, pred_pca_test)
     }
     
-    # - pca: speed
+    # - pca: speed (1st PC: 95%)
     if ( speed == TRUE )
-    {
-        # - 1st PC: 95%
-        df_train_sub <- dplyr::select(df, ResultSpeed, AvgSpeed)
+    {        
+        # - limit data: train
+        df_train_sub <- df_train_wthr %>% 
+            dplyr::select(ResultSpeed, AvgSpeed)
+        # - limit data: test
+        df_test_sub <- df_test_wthr %>% 
+            dplyr::select(ResultSpeed, AvgSpeed)
+        
+        # - pca: train
+        #summary(prcomp(df_train_sub, scale=T, center=T))
         pca_sub_obj <- caret::preProcess(df_train_sub, 
             pcaComp=1, method=c("BoxCox", "center", "scale", "pca"))
-        pred_pca_sub <- predict(pca_sub_obj, df_train_sub)
-        df$PC1_speed <- pred_pca_sub[,1]
-        rm(df_train_sub, pca_sub_obj, pred_pca_sub)
+        
+        # - predict: train
+        pred_pca_train <- predict(pca_sub_obj, df_train_sub)
+        # - predict: test (must use the same PC rotations as training data)
+        pred_pca_test <- predict(pca_sub_obj, df_test_sub)
+        
+        # - add vars: train
+        df_train_wthr$PC1_speed <- pred_pca_train[,1]
+        # - add to test set
+        df_test_wthr$PC1_speed <- pred_pca_test[,1]
+        
+        # - clean up
+        rm(df_train_sub, df_test_sub, pca_sub_obj, pred_pca_train, pred_pca_test)
     }
     
     # - return
-    invisible(df)
+    invisible(list("train"=df_train_wthr, "test"=df_test_wthr))
 }
 
 
