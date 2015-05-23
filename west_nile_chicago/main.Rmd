@@ -103,8 +103,8 @@ df_train <- load_train(path_data_train, collapse=TRUE)
 #   there is ALOT of data here, due to simulated traps???
 df_test <- load_test(path_data_test)
 
-# - load: sample submission
-df_submission <- load_submission(path_data_submission)
+# - load: sample submission (load in modeling sections)
+#df_submission <- load_submission(path_data_submission)
 
 # - join: train and weather
 df_wthr_join_list <- join_train_test_to_weather()
@@ -126,7 +126,7 @@ df_train_wthr_val <- df_train_wthr[-train_index,]
 #table(df_train_wthr_val$WnvPresentF); prop.table(table(df_train_wthr_val$WnvPresentF))*100
 
 # - clearn up
-rm(df_wthr_join_list, df_pca_list, train_index); gc()
+rm(df_wthr_join_list, df_wthr_join_list, df_pca_list, train_index); gc()
 
 ```
 

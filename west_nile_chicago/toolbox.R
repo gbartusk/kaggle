@@ -585,7 +585,7 @@ create_submission <- function(file_path_out, model_fit)
 
 
 # - join train and test to weather (assumes data already in memory)
-join_train_test_to_weather <- function()
+join_train_test_to_weather <- function(lag=TRUE)
 {
     # - relying on data to already be in memory until i figure out how to
     #   get around the no pass by reference
@@ -598,45 +598,117 @@ join_train_test_to_weather <- function()
     require(dplyr)          # - data manipulation
     
     # - remove columns that are alread in train/test
+    #   heat and cool are derived, SnowFall and Depth are 0 in dataset,
+    #   Sunrise and Sunset and replace with numeric form
     df_wthr_sub <- df_weather %>%
-        dplyr::select(-Date,-Year,-Month,-Latitude,-Longitude)
-    
-    # - check weather data is daily spaced
-    t <- df_weather %>%
-        dplyr::mutate(Month=month(Date)) %>%
-        dplyr::group_by(Year, Month) %>%
-        dplyr::summarise(DaysObs=n_distinct(Date)) %>%
-        dplyr::mutate(
-            DaysAct=Hmisc::monthDays(as.Date(paste(Year,Month,1,sep="-"))),
-            DaysDiff = DaysObs - DaysAct)
-    #sum(t$DaysDiff)
-    
-    # - add lag dates: train
-    df_train2 <- df_train %>%
-        dplyr::mutate(
-            DateStr_1d = format(Date-1, "%Y%m%d"),
-            DateStr_2d = format(Date-2, "%Y%m%d"),
-            DateStr_3d = format(Date-3, "%Y%m%d"),
-            DateStr_5d = format(Date-5, "%Y%m%d"),
-            DateStr_7d = format(Date-7, "%Y%m%d"),
-            DateStr_9d = format(Date-9, "%Y%m%d"),
-            DateStr_14d = format(Date-14, "%Y%m%d")
-        )
+        dplyr::select(
+            -Date,-Year,-Month, -Latitude,-Longitude,
+            -Sunrise,-Sunset, -Heat,-Cool, -Depth,-SnowFall)
     
     # - join: train
-    df_train_wthr <- as.data.frame(
-        df_train %>%
-        dplyr::left_join(df_wthr_sub, by=c("DateStr","Station"))
-    )
+    df_train_wthr <- df_train %>% 
+        dplyr::left_join(df_wthr_sub, by=c("DateStr","Station")) 
     
     # - join: test
-    df_test_wthr <- as.data.frame(
-        df_test %>%
+    df_test_wthr <- df_test %>%
         dplyr::left_join(df_wthr_sub, by=c("DateStr","Station"))
-    )
     
-    # - return
-    invisible(list("train"=df_train_wthr, "test"=df_test_wthr))
+    if ( lag==TRUE )
+    {
+        # - weather data is daily spaced and has min date of 2007-5-1 and train
+        #   data has min date of 2007-5-1 and test 2008-6-11
+#         t <- df_weather %>%
+#             dplyr::mutate(Month=month(Date)) %>%
+#             dplyr::group_by(Year, Month) %>%
+#             dplyr::summarise(DaysObs=n_distinct(Date)) %>%
+#             dplyr::mutate(
+#                 DaysAct=Hmisc::monthDays(as.Date(paste(Year,Month,1,sep="-"))),
+#                 DaysDiff = DaysObs - DaysAct)
+#         sum(t$DaysDiff)
+        
+#         # - copy dataframe to list to avoid copys inside the loop
+#         #   see hadley Advanced R, Memory chapter
+#         # - this still makes one duplication (refs=2), why??
+#         list_train <- as.list(df_train_wthr)
+#         #print(paste("start mem:",c(address(df_train_wthr), refs(df_train_wthr))))
+#         list_test <- as.list(df_test_wthr)
+#         list_wthr_sub <- as.list(df_train_wthr)
+        
+        # - lag dates: train
+        df_train_wthr <- df_train_wthr %>% 
+            dplyr::mutate(
+                DateStr_1d=format(Date-1, "%Y%m%d"),
+                DateStr_3d=format(Date-3, "%Y%m%d"),
+                DateStr_7d=format(Date-7, "%Y%m%d"),
+                DateStr_14d=format(Date-14, "%Y%m%d")
+            )
+        
+        # - 1d lag: train
+        df_wthr_sub_lag <- df_wthr_sub
+        colnames(df_wthr_sub_lag) <- paste0(colnames(df_wthr_sub_lag),"_1d")
+        df_train_wthr <- df_train_wthr %>% dplyr::left_join(df_wthr_sub_lag, 
+            by=c("DateStr_1d","Station"="Station_1d"))
+        
+        # - 3d lag: train
+        df_wthr_sub_lag <- df_wthr_sub
+        colnames(df_wthr_sub_lag) <- paste0(colnames(df_wthr_sub_lag),"_3d")
+        df_train_wthr <- df_train_wthr %>% dplyr::left_join(df_wthr_sub_lag, 
+            by=c("DateStr_3d","Station"="Station_3d"))
+        
+        # - 7d lag: train
+        df_wthr_sub_lag <- df_wthr_sub
+        colnames(df_wthr_sub_lag) <- paste0(colnames(df_wthr_sub_lag),"_7d")
+        df_train_wthr <- df_train_wthr %>% dplyr::left_join(df_wthr_sub_lag, 
+            by=c("DateStr_7d","Station"="Station_7d"))
+        
+        # - 14d lag: train
+        df_wthr_sub_lag <- df_wthr_sub
+        colnames(df_wthr_sub_lag) <- paste0(colnames(df_wthr_sub_lag),"_14d")
+        df_train_wthr <- df_train_wthr %>% dplyr::left_join(df_wthr_sub_lag, 
+            by=c("DateStr_14d","Station"="Station_14d"))
+        
+        
+        # - lag dates: test
+        df_test_wthr <- df_test_wthr %>% 
+            dplyr::mutate(
+                DateStr_1d=format(Date-1, "%Y%m%d"),
+                DateStr_3d=format(Date-3, "%Y%m%d"),
+                DateStr_5d=format(Date-5, "%Y%m%d"),
+                DateStr_7d=format(Date-7, "%Y%m%d"),
+                DateStr_9d=format(Date-9, "%Y%m%d"),
+                DateStr_14d=format(Date-14, "%Y%m%d")
+            )
+        
+        # - 1d lag: test
+        df_wthr_sub_lag <- df_wthr_sub
+        colnames(df_wthr_sub_lag) <- paste0(colnames(df_wthr_sub_lag),"_1d")
+        df_test_wthr <- df_test_wthr %>% dplyr::left_join(df_wthr_sub_lag, 
+            by=c("DateStr_1d","Station"="Station_1d"))
+        
+        # - 3d lag: test
+        df_wthr_sub_lag <- df_wthr_sub
+        colnames(df_wthr_sub_lag) <- paste0(colnames(df_wthr_sub_lag),"_3d")
+        df_test_wthr <- df_test_wthr %>% dplyr::left_join(df_wthr_sub_lag, 
+            by=c("DateStr_3d","Station"="Station_3d"))
+        
+        # - 7d lag: test
+        df_wthr_sub_lag <- df_wthr_sub
+        colnames(df_wthr_sub_lag) <- paste0(colnames(df_wthr_sub_lag),"_7d")
+        df_test_wthr <- df_test_wthr %>% dplyr::left_join(df_wthr_sub_lag, 
+            by=c("DateStr_7d","Station"="Station_7d"))
+        
+        # - 14d lag: test
+        df_wthr_sub_lag <- df_wthr_sub
+        colnames(df_wthr_sub_lag) <- paste0(colnames(df_wthr_sub_lag),"_14d")
+        df_test_wthr <- df_test_wthr %>% dplyr::left_join(df_wthr_sub_lag, 
+            by=c("DateStr_14d","Station"="Station_14d"))
+        
+    }
+    
+    # - return list of data sets
+    invisible(list(
+        "train"=as.data.frame(df_train_wthr), 
+        "test"=as.data.frame(df_test_wthr)))
 }
 
 
@@ -702,7 +774,7 @@ top_cor_pairs <- function(df, thresh)
 
 
 # - add pre-defined weather based PCA variables (assumes data already in memory)
-get_weather_pcas <- function(temp=TRUE, pres_lvl=TRUE, speed=TRUE)
+get_weather_pcas <- function(temp=TRUE, pres_lvl=TRUE, speed=TRUE, lags_on=TRUE)
 {
     # - temp: Tmax, Tmin, Tavg, DewPoint, WetBulb
     # - pres_lvl: StnPressure, SeaLevel
@@ -744,6 +816,66 @@ get_weather_pcas <- function(temp=TRUE, pres_lvl=TRUE, speed=TRUE)
         df_test_wthr$PC1_temp <- pred_pca_test$PC1
         df_test_wthr$PC2_temp <- pred_pca_test$PC2
         
+        # - compute pca for lag variables if they were run
+        if ( lags_on==TRUE )
+        {
+            # - 1d lag: train / test
+            df_train_sub <- df_train_wthr %>% 
+                dplyr::select(Tmax_1d, Tmin_1d, Tavg_1d, DewPoint_1d, WetBulb_1d)
+            df_test_sub <- df_test_wthr %>% 
+                dplyr::select(Tmax_1d, Tmin_1d, Tavg_1d, DewPoint_1d, WetBulb_1d)
+            pca_sub_obj <- caret::preProcess(df_train_sub, 
+                pcaComp=2, method=c("BoxCox", "center", "scale", "pca"))
+            pred_pca_train <- predict(pca_sub_obj, df_train_sub)
+            pred_pca_test <- predict(pca_sub_obj, df_test_sub)
+            df_train_wthr$PC1_temp_1d <- pred_pca_train$PC1
+            df_train_wthr$PC2_temp_1d <- pred_pca_train$PC2
+            df_test_wthr$PC1_temp_1d <- pred_pca_test$PC1
+            df_test_wthr$PC2_temp_1d <- pred_pca_test$PC2
+            
+            # - 3d lag: train / test
+            df_train_sub <- df_train_wthr %>% 
+                dplyr::select(Tmax_3d, Tmin_3d, Tavg_3d, DewPoint_3d, WetBulb_3d)
+            df_test_sub <- df_test_wthr %>% 
+                dplyr::select(Tmax_3d, Tmin_3d, Tavg_3d, DewPoint_3d, WetBulb_3d)
+            pca_sub_obj <- caret::preProcess(df_train_sub, 
+                pcaComp=2, method=c("BoxCox", "center", "scale", "pca"))
+            pred_pca_train <- predict(pca_sub_obj, df_train_sub)
+            pred_pca_test <- predict(pca_sub_obj, df_test_sub)
+            df_train_wthr$PC1_temp_3d <- pred_pca_train$PC1
+            df_train_wthr$PC2_temp_3d <- pred_pca_train$PC2
+            df_test_wthr$PC1_temp_3d <- pred_pca_test$PC1
+            df_test_wthr$PC2_temp_3d <- pred_pca_test$PC2
+            
+            # - 7d lag: train / test
+            df_train_sub <- df_train_wthr %>% 
+                dplyr::select(Tmax_7d, Tmin_7d, Tavg_7d, DewPoint_7d, WetBulb_7d)
+            df_test_sub <- df_test_wthr %>% 
+                dplyr::select(Tmax_7d, Tmin_7d, Tavg_7d, DewPoint_7d, WetBulb_7d)
+            pca_sub_obj <- caret::preProcess(df_train_sub, 
+                pcaComp=2, method=c("BoxCox", "center", "scale", "pca"))
+            pred_pca_train <- predict(pca_sub_obj, df_train_sub)
+            pred_pca_test <- predict(pca_sub_obj, df_test_sub)
+            df_train_wthr$PC1_temp_7d <- pred_pca_train$PC1
+            df_train_wthr$PC2_temp_7d <- pred_pca_train$PC2
+            df_test_wthr$PC1_temp_7d <- pred_pca_test$PC1
+            df_test_wthr$PC2_temp_7d <- pred_pca_test$PC2
+            
+            # - 14d lag: train / test
+            df_train_sub <- df_train_wthr %>% 
+                dplyr::select(Tmax_14d, Tmin_14d, Tavg_14d, DewPoint_14d, WetBulb_14d)
+            df_test_sub <- df_test_wthr %>% 
+                dplyr::select(Tmax_14d, Tmin_14d, Tavg_14d, DewPoint_14d, WetBulb_14d)
+            pca_sub_obj <- caret::preProcess(df_train_sub, 
+                pcaComp=2, method=c("BoxCox", "center", "scale", "pca"))
+            pred_pca_train <- predict(pca_sub_obj, df_train_sub)
+            pred_pca_test <- predict(pca_sub_obj, df_test_sub)
+            df_train_wthr$PC1_temp_14d <- pred_pca_train$PC1
+            df_train_wthr$PC2_temp_14d <- pred_pca_train$PC2
+            df_test_wthr$PC1_temp_14d <- pred_pca_test$PC1
+            df_test_wthr$PC2_temp_14d <- pred_pca_test$PC2
+        }
+        
         # - clean up
         rm(df_train_sub, df_test_sub, pca_sub_obj, pred_pca_train, pred_pca_test)
     }
@@ -773,6 +905,58 @@ get_weather_pcas <- function(temp=TRUE, pres_lvl=TRUE, speed=TRUE)
         # - add to test set
         df_test_wthr$PC1_pres_lvl <- pred_pca_test[,1]
         
+        # - compute pca for lag variables if they were run
+        if ( lags_on==TRUE )
+        {
+            # - 1d lag: train / test
+            df_train_sub <- df_train_wthr %>% 
+                dplyr::select(StnPressure_1d, SeaLevel_1d)
+            df_test_sub <- df_test_wthr %>% 
+                dplyr::select(StnPressure_1d, SeaLevel_1d)
+            pca_sub_obj <- caret::preProcess(df_train_sub, 
+                pcaComp=2, method=c("BoxCox", "center", "scale", "pca"))
+            pred_pca_train <- predict(pca_sub_obj, df_train_sub)
+            pred_pca_test <- predict(pca_sub_obj, df_test_sub)
+            df_train_wthr$PC1_pres_lvl_1d <- pred_pca_train[,1]
+            df_test_wthr$PC1_pres_lvl_1d <- pred_pca_test[,1]
+            
+            # - 3d lag: train / test
+            df_train_sub <- df_train_wthr %>% 
+                dplyr::select(StnPressure_3d, SeaLevel_3d)
+            df_test_sub <- df_test_wthr %>% 
+                dplyr::select(StnPressure_3d, SeaLevel_3d)
+            pca_sub_obj <- caret::preProcess(df_train_sub, 
+                pcaComp=2, method=c("BoxCox", "center", "scale", "pca"))
+            pred_pca_train <- predict(pca_sub_obj, df_train_sub)
+            pred_pca_test <- predict(pca_sub_obj, df_test_sub)
+            df_train_wthr$PC1_pres_lvl_3d <- pred_pca_train[,1]
+            df_test_wthr$PC1_pres_lvl_3d <- pred_pca_test[,1]
+            
+            # - 7d lag: train / test
+            df_train_sub <- df_train_wthr %>% 
+                dplyr::select(StnPressure_7d, SeaLevel_7d)
+            df_test_sub <- df_test_wthr %>% 
+                dplyr::select(StnPressure_7d, SeaLevel_7d)
+            pca_sub_obj <- caret::preProcess(df_train_sub, 
+                pcaComp=2, method=c("BoxCox", "center", "scale", "pca"))
+            pred_pca_train <- predict(pca_sub_obj, df_train_sub)
+            pred_pca_test <- predict(pca_sub_obj, df_test_sub)
+            df_train_wthr$PC1_pres_lvl_7d <- pred_pca_train[,1]
+            df_test_wthr$PC1_pres_lvl_7d <- pred_pca_test[,1]
+            
+            # - 14d lag: train / test
+            df_train_sub <- df_train_wthr %>% 
+                dplyr::select(StnPressure_14d, SeaLevel_14d)
+            df_test_sub <- df_test_wthr %>% 
+                dplyr::select(StnPressure_14d, SeaLevel_14d)
+            pca_sub_obj <- caret::preProcess(df_train_sub, 
+                pcaComp=2, method=c("BoxCox", "center", "scale", "pca"))
+            pred_pca_train <- predict(pca_sub_obj, df_train_sub)
+            pred_pca_test <- predict(pca_sub_obj, df_test_sub)
+            df_train_wthr$PC1_pres_lvl_14d <- pred_pca_train[,1]
+            df_test_wthr$PC1_pres_lvl_14d <- pred_pca_test[,1]
+        }
+        
         # - clean up
         rm(df_train_sub, df_test_sub, pca_sub_obj, pred_pca_train, pred_pca_test)
     }
@@ -801,6 +985,58 @@ get_weather_pcas <- function(temp=TRUE, pres_lvl=TRUE, speed=TRUE)
         df_train_wthr$PC1_speed <- pred_pca_train[,1]
         # - add to test set
         df_test_wthr$PC1_speed <- pred_pca_test[,1]
+        
+        # - compute pca for lag variables if they were run
+        if ( lags_on==TRUE )
+        {
+            # - 1d lag: train / test
+            df_train_sub <- df_train_wthr %>% 
+                dplyr::select(ResultSpeed_1d, AvgSpeed_1d)
+            df_test_sub <- df_test_wthr %>% 
+                dplyr::select(ResultSpeed_1d, AvgSpeed_1d)
+            pca_sub_obj <- caret::preProcess(df_train_sub, 
+                pcaComp=2, method=c("BoxCox", "center", "scale", "pca"))
+            pred_pca_train <- predict(pca_sub_obj, df_train_sub)
+            pred_pca_test <- predict(pca_sub_obj, df_test_sub)
+            df_train_wthr$PC1_speed_1d <- pred_pca_train[,1]
+            df_test_wthr$PC1_speed_1d <- pred_pca_test[,1]
+            
+            # - 3d lag: train / test
+            df_train_sub <- df_train_wthr %>% 
+                dplyr::select(ResultSpeed_3d, AvgSpeed_3d)
+            df_test_sub <- df_test_wthr %>% 
+                dplyr::select(ResultSpeed_3d, AvgSpeed_3d)
+            pca_sub_obj <- caret::preProcess(df_train_sub, 
+                pcaComp=2, method=c("BoxCox", "center", "scale", "pca"))
+            pred_pca_train <- predict(pca_sub_obj, df_train_sub)
+            pred_pca_test <- predict(pca_sub_obj, df_test_sub)
+            df_train_wthr$PC1_speed_3d <- pred_pca_train[,1]
+            df_test_wthr$PC1_speed_3d <- pred_pca_test[,1]
+            
+            # - 7d lag: train / test
+            df_train_sub <- df_train_wthr %>% 
+                dplyr::select(ResultSpeed_7d, AvgSpeed_7d)
+            df_test_sub <- df_test_wthr %>% 
+                dplyr::select(ResultSpeed_7d, AvgSpeed_7d)
+            pca_sub_obj <- caret::preProcess(df_train_sub, 
+                pcaComp=2, method=c("BoxCox", "center", "scale", "pca"))
+            pred_pca_train <- predict(pca_sub_obj, df_train_sub)
+            pred_pca_test <- predict(pca_sub_obj, df_test_sub)
+            df_train_wthr$PC1_speed_7d <- pred_pca_train[,1]
+            df_test_wthr$PC1_speed_7d <- pred_pca_test[,1]
+            
+            # - 14d lag: train / test
+            df_train_sub <- df_train_wthr %>% 
+                dplyr::select(ResultSpeed_14d, AvgSpeed_14d)
+            df_test_sub <- df_test_wthr %>% 
+                dplyr::select(ResultSpeed_14d, AvgSpeed_14d)
+            pca_sub_obj <- caret::preProcess(df_train_sub, 
+                pcaComp=2, method=c("BoxCox", "center", "scale", "pca"))
+            pred_pca_train <- predict(pca_sub_obj, df_train_sub)
+            pred_pca_test <- predict(pca_sub_obj, df_test_sub)
+            df_train_wthr$PC1_speed_14d <- pred_pca_train[,1]
+            df_test_wthr$PC1_speed_14d <- pred_pca_test[,1]
+        }
         
         # - clean up
         rm(df_train_sub, df_test_sub, pca_sub_obj, pred_pca_train, pred_pca_test)
