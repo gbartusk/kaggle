@@ -264,7 +264,7 @@ load_weather <- function(file_path, impute=TRUE)
         #   due to zero values (.01 is the smallest value >0)
         #table(Hmisc::cut2(df_train_wthr$PrecipTotal,cuts=c(0,.1,.5,1,1.5,2,3.9)))
         #range(df_weather$PrecipTotal[df_weather$PrecipTotal>0])
-        df_data3$PrecipTotalLog <- log(df_data3$PrecipTotal+.001)
+        #df_data3$PrecipTotalLog <- log(df_data3$PrecipTotal+.001) # move to below
         
         # - for return
         df_data <- as.data.frame(df_data3)
@@ -283,7 +283,10 @@ load_weather <- function(file_path, impute=TRUE)
             SunriseNum = as.numeric(format(Sunrise, "%H.%M")),
             # - sunset
             Sunset = as.POSIXct(strptime(paste(DateStr,Sunset), "%Y%m%d %H%M")),
-            SunsetNum = as.numeric(format(Sunset, "%H.%M"))
+            SunsetNum = as.numeric(format(Sunset, "%H.%M")),
+            # - PrecipTotal has very large outliers, take log and add small amount
+            #   due to zero values (.01 is the smallest value >0)
+            PrecipTotalLog = log(PrecipTotal+.001)
         ) %>%
         dplyr::select(
             # - only needed for doing the imputing
@@ -703,6 +706,9 @@ join_train_test_to_weather <- function(lag=TRUE)
         df_test_wthr <- df_test_wthr %>% dplyr::left_join(df_wthr_sub_lag, 
             by=c("DateStr_14d","Station"="Station_14d"))
         
+        # - confirm no nas
+        #sum(sapply(df_train_wthr, function(x) sum(is.na(x))))
+        #sum(sapply(df_test_wthr, function(x) sum(is.na(x))))
     }
     
     # - return list of data sets
@@ -776,9 +782,18 @@ top_cor_pairs <- function(df, thresh)
 # - add pre-defined weather based PCA variables (assumes data already in memory)
 get_weather_pcas <- function(temp=TRUE, pres_lvl=TRUE, speed=TRUE, lags_on=TRUE)
 {
-    # - temp: Tmax, Tmin, Tavg, DewPoint, WetBulb
-    # - pres_lvl: StnPressure, SeaLevel
-    # - speed: ResultSpeed, AvgSpeed
+    # - compute principal components of weather variable groups
+    #
+    # - @param temp: 
+    # - @param pres_lvl: 
+    # - @param speed: 
+    # - @param lags_on: if join_train_test_to_weather() was run with lags
+    # - @return: list with training and test data
+    
+    # - groupings based on correlation analysis
+    #   > temp: Tmax, Tmin, Tavg, DewPoint, WetBulb
+    #   > pres_lvl: StnPressure, SeaLevel
+    #   > speed: ResultSpeed, AvgSpeed
 
     # - relying on data to already be in memory
     if( !exists("df_train_wthr") || !exists("df_test_wthr") )
